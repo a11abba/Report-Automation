@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Audit Assistant</title>
+    <style>
+      body { font-family: "Segoe UI", sans-serif; margin: 0; padding: 16px; background: #f6f3ed; color: #14213d; }
+      .card { background: white; border: 1px solid #d7d1c7; border-radius: 18px; padding: 16px; margin-bottom: 12px; }
+      button, input { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid #d7d1c7; margin-top: 8px; box-sizing: border-box; }
+      button { background: #14213d; color: white; border: none; cursor: pointer; }
+      small { color: #62708a; display: block; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h2>Audit Assistant</h2>
+      <p id="context">Detecting current page context...</p>
+      <small>This extension is internal. It sends the current context to your dashboard workflow.</small>
+    </div>
+    <div class="card">
+      <label for="apiBase">Dashboard base URL</label>
+      <input id="apiBase" placeholder="http://localhost:3000" />
+      <button id="save">Save URL</button>
+      <button id="open">Open dashboard</button>
+    </div>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

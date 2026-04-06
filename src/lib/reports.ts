@@ -1,0 +1,146 @@
+import { accessSync, constants } from "node:fs";
+import { chromium } from "playwright";
+import { type AuditReportPayload } from "@/lib/audit/types";
+import { localizeReportLabel } from "./report-i18n";
+
+function formatPercent(locale: AuditReportPayload["locale"], value: number | null | undefined) {
+  if (value == null) return "N/A";
+  return new Intl.NumberFormat(locale, {
+    style: "percent",
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+export function getPdfRendererStatus() {
+  try {
+    accessSync(chromium.executablePath(), constants.F_OK);
+    return {
+      available: true,
+      message: "Playwright Chromium is ready.",
+    };
+  } catch {
+    return {
+      available: false,
+      message: "Playwright Chromium is missing. Run `npx playwright install chromium` to enable PDF export.",
+    };
+  }
+}
+
+export function renderReportHtml(report: AuditReportPayload): string {
+  const labels = localizeReportLabel(report.locale);
+  const findings = report.findings
+    .map(
+      (finding) => `
+        <article class="finding ${finding.status}">
+          <div class="finding-meta">
+            <span>${escapeHtml(finding.section)}</span>
+            <strong>${escapeHtml(finding.severityLabel)}</strong>
+          </div>
+          <h3>${escapeHtml(finding.summary)}</h3>
+          <p>${escapeHtml(finding.recommendedAction)}</p>
+          <ul>${finding.evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+        </article>
+      `,
+    )
+    .join("");
+
+  const sectionRows = report.sectionScores
+    .map(
+      (section) => `<tr><td>${escapeHtml(section.label)}</td><td>${section.findingCount}</td><td>${section.score}</td></tr>`,
+    )
+    .join("");
+
+  const locationRows = report.locationScores
+    .map(
+      (location) => `<tr><td>${escapeHtml(location.label)}</td><td>${location.score}</td><td>${escapeHtml(location.notes.join(" ") || labels.healthyBaseline)}</td></tr>`,
+    )
+    .join("");
+
+  return `
+    <!DOCTYPE html>
+    <html lang="${report.locale}">
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: "Segoe UI", sans-serif; color: #14213d; background: linear-gradient(180deg, #f4f1ea 0%, #f8fafc 55%, #ffffff 100%); margin: 0; padding: 40px; }
+          .hero { padding: 32px; border-radius: 28px; background: #14213d; color: #fffdf7; }
+          .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 24px 0; }
+          .card { background: white; border: 1px solid #d7d1c7; border-radius: 20px; padding: 18px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; border-radius: 18px; overflow: hidden; }
+          th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ece7de; vertical-align: top; }
+          .findings { display: grid; gap: 14px; margin-top: 24px; }
+          .finding { background: white; border: 1px solid #ece7de; border-left: 8px solid #8d99ae; border-radius: 18px; padding: 18px; }
+          .finding.failing { border-left-color: #c1121f; }
+          .finding.watch { border-left-color: #fca311; }
+          .finding.passing { border-left-color: #2a9d8f; }
+          .finding-meta { display: flex; justify-content: space-between; text-transform: uppercase; font-size: 11px; letter-spacing: 0.12em; }
+          ul { padding-left: 18px; }
+        </style>
+      </head>
+      <body>
+        <section class="hero">
+          <p>${escapeHtml(labels.title)}</p>
+          <h1>${escapeHtml(report.clientName)}</h1>
+          <p>${escapeHtml(report.clientIndustryLabel)} • ${escapeHtml(report.snapshot.platformLabels.join(", "))}</p>
+          <p>${escapeHtml(labels.generated)} ${escapeHtml(new Date(report.generatedAt).toLocaleString(report.locale))}</p>
+        </section>
+        <section class="grid">
+          <div class="card"><p>${escapeHtml(labels.score)}</p><h2>${report.score}</h2></div>
+          <div class="card"><p>${escapeHtml(labels.grade)}</p><h2>${report.grade}</h2></div>
+          <div class="card"><p>${escapeHtml(labels.findings)}</p><h2>${report.findings.length}</h2></div>
+          <div class="card"><p>${escapeHtml(labels.locations)}</p><h2>${report.summary.locationCount}</h2></div>
+        </section>
+        <section class="card">
+          <h2>${escapeHtml(labels.topRisks)}</h2>
+          <ul>${report.summary.topRisks.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          <h2>${escapeHtml(labels.strengths)}</h2>
+          <ul>${(report.summary.strengths.length ? report.summary.strengths : [labels.noStrengths]).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+        </section>
+        <table>
+          <thead><tr><th>${escapeHtml(labels.section)}</th><th>${escapeHtml(labels.findings)}</th><th>${escapeHtml(labels.scoreCol)}</th></tr></thead>
+          <tbody>${sectionRows}</tbody>
+        </table>
+        ${report.locationScores.length > 0 ? `<table><thead><tr><th>${escapeHtml(labels.locations)}</th><th>${escapeHtml(labels.scoreCol)}</th><th>${escapeHtml(labels.notes)}</th></tr></thead><tbody>${locationRows}</tbody></table>` : ""}
+        <section class="card" style="margin-top: 20px;">
+          <h2>${escapeHtml(labels.snapshotHighlights)}</h2>
+          <p>${escapeHtml(labels.organicCtr)}: ${formatPercent(report.locale, report.snapshot.search?.ctr)}</p>
+          <p>${escapeHtml(labels.averageRating)}: ${report.snapshot.reputation?.averageRating?.toFixed(1) ?? "N/A"}</p>
+          <p>${escapeHtml(labels.ga4ConversionRate)}: ${formatPercent(report.locale, report.snapshot.trafficAttribution?.conversionRate)}</p>
+          <p>${escapeHtml(labels.websitePerformanceScore)}: ${report.snapshot.website?.pageSpeedScore ?? "N/A"}</p>
+          <p>${escapeHtml(labels.campaignOpenRate)}: ${formatPercent(report.locale, report.snapshot.campaigns?.metrics.openRate.value as number | null | undefined)}</p>
+        </section>
+        <section class="findings">${findings}</section>
+      </body>
+    </html>
+  `;
+}
+
+export async function renderReportPdf(report: AuditReportPayload): Promise<Buffer> {
+  const status = getPdfRendererStatus();
+  if (!status.available) {
+    throw new Error(status.message);
+  }
+
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(renderReportHtml(report), { waitUntil: "networkidle" });
+    const buffer = await page.pdf({
+      printBackground: true,
+      format: "A4",
+      margin: { top: "24px", right: "24px", bottom: "24px", left: "24px" },
+    });
+    return Buffer.from(buffer);
+  } finally {
+    await browser.close();
+  }
+}
