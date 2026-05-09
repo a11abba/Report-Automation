@@ -687,18 +687,24 @@ export function DashboardShell({
                               <a
                                 className="text-[color:var(--signal)] underline"
                                 href={`/api/audits/${audit.id}`}
+                                rel="noreferrer"
+                                target="_blank"
                               >
                                 Details
                               </a>
                               <a
                                 className="text-[color:var(--signal)] underline"
                                 href={`/api/audits/${audit.id}/locations`}
+                                rel="noreferrer"
+                                target="_blank"
                               >
                                 Locations
                               </a>
                               <a
                                 className="text-[color:var(--signal)] underline"
                                 href={`/api/audits/${audit.id}/report.json`}
+                                rel="noreferrer"
+                                target="_blank"
                               >
                                 JSON
                               </a>
@@ -706,6 +712,8 @@ export function DashboardShell({
                                 <a
                                   className="text-[color:var(--signal)] underline"
                                   href={`/api/audits/${audit.id}/report.pdf`}
+                                  rel="noreferrer"
+                                  target="_blank"
                                 >
                                   PDF
                                 </a>

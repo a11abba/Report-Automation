@@ -251,6 +251,17 @@ export interface TrafficChannelSnapshot {
   share: number;
 }
 
+export interface TrafficSourceMediumSnapshot {
+  source: string;
+  medium: string;
+  sessions: number;
+  pageViews: number;
+  keyEvents: number;
+  revenue: number;
+  conversionRate: number;
+  share: number;
+}
+
 export interface LandingPageSnapshot {
   path: string;
   sessions: number;
@@ -266,6 +277,7 @@ export interface TrafficAttributionSection {
   engagementRate: number;
   conversionRate: number;
   topChannels: TrafficChannelSnapshot[];
+  topSourceMediums: TrafficSourceMediumSnapshot[];
   topLandingPages: LandingPageSnapshot[];
 }
 

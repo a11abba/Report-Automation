@@ -12,6 +12,18 @@ function formatPercent(locale: AuditReportPayload["locale"], value: number | nul
   }).format(value);
 }
 
+function formatNumber(
+  locale: AuditReportPayload["locale"],
+  value: number | null | undefined,
+  digits = 0,
+) {
+  if (value == null) return "N/A";
+  return new Intl.NumberFormat(locale, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value);
+}
+
 function escapeHtml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -65,6 +77,23 @@ export function renderReportHtml(report: AuditReportPayload): string {
     )
     .join("");
 
+  const acquisitionRows = report.snapshot.trafficAttribution?.topSourceMediums
+    ?.map(
+      (item) => `
+        <tr>
+          <td>${escapeHtml(item.source)}</td>
+          <td>${escapeHtml(item.medium)}</td>
+          <td>${formatNumber(report.locale, item.sessions)}</td>
+          <td>${formatNumber(report.locale, item.pageViews)}</td>
+          <td>${formatNumber(report.locale, item.keyEvents)}</td>
+          <td>${formatNumber(report.locale, item.revenue, 2)}</td>
+          <td>${formatPercent(report.locale, item.conversionRate)}</td>
+          <td>${formatPercent(report.locale, item.share)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+
   return `
     <!DOCTYPE html>
     <html lang="${report.locale}">
@@ -110,8 +139,26 @@ export function renderReportHtml(report: AuditReportPayload): string {
           <tbody>${sectionRows}</tbody>
         </table>
         ${report.locationScores.length > 0 ? `<table><thead><tr><th>${escapeHtml(labels.locations)}</th><th>${escapeHtml(labels.scoreCol)}</th><th>${escapeHtml(labels.notes)}</th></tr></thead><tbody>${locationRows}</tbody></table>` : ""}
+        ${acquisitionRows ? `
+          <table>
+            <thead>
+              <tr>
+                <th>${escapeHtml(labels.source)}</th>
+                <th>${escapeHtml(labels.medium)}</th>
+                <th>${escapeHtml(labels.sessions)}</th>
+                <th>${escapeHtml(labels.pageViews)}</th>
+                <th>${escapeHtml(labels.keyEvents)}</th>
+                <th>${escapeHtml(labels.revenue)}</th>
+                <th>${escapeHtml(labels.ga4ConversionRate)}</th>
+                <th>${escapeHtml(labels.share)}</th>
+              </tr>
+            </thead>
+            <tbody>${acquisitionRows}</tbody>
+          </table>
+        ` : ""}
         <section class="card" style="margin-top: 20px;">
           <h2>${escapeHtml(labels.snapshotHighlights)}</h2>
+          ${acquisitionRows ? `<p><strong>${escapeHtml(labels.acquisitionCrosswalk)}:</strong> ${escapeHtml(labels.source)} + ${escapeHtml(labels.medium)} + outcome (${escapeHtml(labels.pageViews)}, ${escapeHtml(labels.keyEvents)}, ${escapeHtml(labels.revenue)}).</p>` : ""}
           <p>${escapeHtml(labels.organicCtr)}: ${formatPercent(report.locale, report.snapshot.search?.ctr)}</p>
           <p>${escapeHtml(labels.averageRating)}: ${report.snapshot.reputation?.averageRating?.toFixed(1) ?? "N/A"}</p>
           <p>${escapeHtml(labels.ga4ConversionRate)}: ${formatPercent(report.locale, report.snapshot.trafficAttribution?.conversionRate)}</p>

@@ -2,6 +2,7 @@ import type {
   IntegrationPropertySummary,
   LandingPageSnapshot,
   TrafficChannelSnapshot,
+  TrafficSourceMediumSnapshot,
 } from "@/lib/audit/types";
 
 const GA4_DATA_API_BASE = "https://analyticsdata.googleapis.com/v1beta";
@@ -42,6 +43,7 @@ export interface Ga4TrafficSnapshot {
   engagementRate: number;
   conversionRate: number;
   topChannels: TrafficChannelSnapshot[];
+  topSourceMediums: TrafficSourceMediumSnapshot[];
   topLandingPages: LandingPageSnapshot[];
 }
 
@@ -187,7 +189,7 @@ export async function verifyGa4PropertyAccess(accessToken: string, property: str
 
 export async function fetchGa4TrafficSnapshot(accessToken: string, property: string): Promise<Ga4TrafficSnapshot> {
   const dateRanges = [{ startDate: "30daysAgo", endDate: "yesterday" }];
-  const [summaryReport, channelReport, landingPageReport] = await Promise.all([
+  const [summaryReport, channelReport, sourceMediumReport, landingPageReport] = await Promise.all([
     runGa4Report(accessToken, property, {
       dateRanges,
       metrics: [
@@ -209,6 +211,19 @@ export async function fetchGa4TrafficSnapshot(accessToken: string, property: str
       ],
       orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
       limit: "5",
+    }),
+    runGa4Report(accessToken, property, {
+      dateRanges,
+      dimensions: [{ name: "sessionSource" }, { name: "sessionMedium" }],
+      metrics: [
+        { name: "sessions" },
+        { name: "screenPageViews" },
+        { name: "keyEvents" },
+        { name: "purchaseRevenue" },
+        { name: "sessionKeyEventRate" },
+      ],
+      orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
+      limit: "8",
     }),
     runGa4Report(accessToken, property, {
       dateRanges,
@@ -240,6 +255,24 @@ export async function fetchGa4TrafficSnapshot(accessToken: string, property: str
     };
   });
 
+  const topSourceMediums: TrafficSourceMediumSnapshot[] = (sourceMediumReport.rows ?? [])
+    .map((row) => {
+      const source = dimensionValue(row, 0) || "(direct)";
+      const medium = dimensionValue(row, 1) || "(none)";
+      const sourceSessions = metricNumber(row, 0);
+      return {
+        source,
+        medium,
+        sessions: sourceSessions,
+        pageViews: metricNumber(row, 1),
+        keyEvents: metricNumber(row, 2),
+        revenue: metricNumber(row, 3),
+        conversionRate: metricNumber(row, 4),
+        share: sessions > 0 ? sourceSessions / sessions : 0,
+      };
+    })
+    .filter((row) => row.source.length > 0 || row.medium.length > 0);
+
   const topLandingPages: LandingPageSnapshot[] = (landingPageReport.rows ?? [])
     .map((row) => ({
       path: dimensionValue(row, 0),
@@ -256,6 +289,7 @@ export async function fetchGa4TrafficSnapshot(accessToken: string, property: str
     engagementRate,
     conversionRate,
     topChannels,
+    topSourceMediums,
     topLandingPages,
   };
 }

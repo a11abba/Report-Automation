@@ -39,6 +39,17 @@ const integrations: IntegrationRecord[] = [
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },
+  {
+    id: "int_ga4",
+    clientId: client.id,
+    platformKey: "google_analytics",
+    platformType: "web_analytics",
+    displayName: "Google Analytics 4",
+    credentials: { authOrigin: "none" },
+    settings: { demoMode: true, targetUrl: client.primaryDomain ?? undefined },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  },
 ];
 
 describe("report rendering", () => {
@@ -67,6 +78,8 @@ describe("report rendering", () => {
     expect(html).toContain(report.clientName);
     expect(html).toContain("Localizações");
     expect(html).toContain("Saude");
+    expect(html).toContain("Cruzamento de aquisição");
+    expect(html).toContain("google");
   });
 
   it("renders english copy when the client report language is english", async () => {
@@ -101,6 +114,7 @@ describe("report rendering", () => {
     expect(html).toContain("Multi-Platform Growth Audit");
     expect(html).toContain("Locations");
     expect(html).toContain("Healthcare");
+    expect(html).toContain("Acquisition Crosswalk");
     expect(report.locale).toBe("en");
   });
 });

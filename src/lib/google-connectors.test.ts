@@ -122,6 +122,35 @@ describe("google analytics connector", () => {
           JSON.stringify({
             rows: [
               {
+                dimensionValues: [{ value: "google" }, { value: "organic" }],
+                metricValues: [
+                  { value: "9230" },
+                  { value: "14120" },
+                  { value: "248" },
+                  { value: "48210" },
+                  { value: "0.026" },
+                ],
+              },
+              {
+                dimensionValues: [{ value: "(direct)" }, { value: "(none)" }],
+                metricValues: [
+                  { value: "5050" },
+                  { value: "8140" },
+                  { value: "112" },
+                  { value: "22640" },
+                  { value: "0.022" },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            rows: [
+              {
                 dimensionValues: [{ value: "/" }],
                 metricValues: [{ value: "6030" }, { value: "0.51" }, { value: "0.011" }],
               },
@@ -149,11 +178,13 @@ describe("google analytics connector", () => {
       requestedCapabilities: connector.capabilities(),
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(snapshot.operationalFlags).not.toContain("ga4_demo_mode");
     expect(snapshot.trafficAttribution?.property).toBe("properties/123456789");
     expect(snapshot.trafficAttribution?.users).toBe(18420);
     expect(snapshot.trafficAttribution?.topChannels[0]?.channel).toBe("Organic Search");
+    expect(snapshot.trafficAttribution?.topSourceMediums[0]?.source).toBe("google");
+    expect(snapshot.trafficAttribution?.topSourceMediums[0]?.medium).toBe("organic");
     expect(snapshot.trafficAttribution?.topLandingPages[1]?.path).toBe("/pricing");
   });
 });

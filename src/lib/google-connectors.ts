@@ -155,6 +155,38 @@ function buildGa4DemoSnapshot(client: ConnectorContext["client"], integration: C
     { channel: "Direct", users: 4200, sessions: 5050, conversionRate: 0.016, share: 0.21 },
     { channel: "Paid Search", users: 3100, sessions: 4200, conversionRate: 0.012, share: 0.18 },
   ];
+  const topSourceMediums = [
+    {
+      source: "google",
+      medium: "organic",
+      sessions: 9230,
+      pageViews: 14120,
+      keyEvents: 248,
+      revenue: 48210,
+      conversionRate: 0.026,
+      share: 0.39,
+    },
+    {
+      source: "(direct)",
+      medium: "(none)",
+      sessions: 5050,
+      pageViews: 8140,
+      keyEvents: 112,
+      revenue: 22640,
+      conversionRate: 0.022,
+      share: 0.21,
+    },
+    {
+      source: "google",
+      medium: "cpc",
+      sessions: 4200,
+      pageViews: 6870,
+      keyEvents: 72,
+      revenue: 15480,
+      conversionRate: 0.017,
+      share: 0.18,
+    },
+  ];
   const topLandingPages = [
     { path: "/", sessions: 6030, engagementRate: 0.51, conversionRate: 0.011 },
     { path: "/locations/chicago", sessions: 1440, engagementRate: 0.63, conversionRate: 0.027 },
@@ -168,6 +200,7 @@ function buildGa4DemoSnapshot(client: ConnectorContext["client"], integration: C
     engagementRate: 0.58,
     conversionRate: 0.019,
     topChannels,
+    topSourceMediums,
     topLandingPages,
   });
   snapshot.operationalFlags.push("ga4_demo_mode");
@@ -490,6 +523,7 @@ export class GoogleAnalyticsConnector implements PlatformConnector {
       engagementRate: ga4.engagementRate,
       conversionRate: ga4.conversionRate,
       topChannels: ga4.topChannels,
+      topSourceMediums: ga4.topSourceMediums,
       topLandingPages: ga4.topLandingPages,
     });
     return snapshot;
