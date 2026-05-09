@@ -1,18 +1,18 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import crypto from "node:crypto";
 import type {
   CredentialSecretPayload,
   IntegrationCredentials,
 } from "@/lib/audit/types";
+import { getAuditDataDir, getAuditDataFile } from "@/lib/runtime-paths";
 import { getEncryptionKey } from "./app-secret";
 
 interface VaultShape {
   secrets: Record<string, string>;
 }
 
-const dataDir = path.join(process.cwd(), "data");
-const vaultFile = path.join(dataDir, "credential-vault.json");
+const dataDir = getAuditDataDir();
+const vaultFile = getAuditDataFile("credential-vault.json");
 
 function emptyVault(): VaultShape {
   return { secrets: {} };
@@ -23,7 +23,10 @@ async function ensureVaultFile() {
   try {
     await readFile(vaultFile, "utf-8");
   } catch {
-    await writeFile(vaultFile, JSON.stringify(emptyVault(), null, 2), "utf-8");
+    await writeFile(vaultFile, JSON.stringify(emptyVault(), null, 2), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
   }
 }
 
@@ -40,7 +43,10 @@ async function readVault() {
 
 async function writeVault(vault: VaultShape) {
   await ensureVaultFile();
-  await writeFile(vaultFile, JSON.stringify(vault, null, 2), "utf-8");
+  await writeFile(vaultFile, JSON.stringify(vault, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
 }
 
 function pickSecretPayload(credentials: IntegrationCredentials): CredentialSecretPayload | null {

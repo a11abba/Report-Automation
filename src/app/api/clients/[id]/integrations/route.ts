@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createIntegrationRecord } from "@/lib/audit-engine";
+import { getAuthSession } from "@/lib/auth-session-server";
+import { assertSafeAuditUrl } from "@/lib/audit-url";
 import { platformCatalog } from "@/lib/connectors";
 
 const integrationSchema = z.object({
@@ -33,6 +35,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  if (!(await getAuthSession())) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
   try {
     const { id } = await context.params;
     const body = integrationSchema.parse(await request.json());
@@ -45,6 +50,10 @@ export async function POST(
     const resolvedDemoMode =
       body.demoMode ??
       (!hasDirectCredential && body.authOrigin !== "oauth" && body.authOrigin !== "service_account");
+    const targetUrl =
+      body.targetUrl == null || body.targetUrl.trim().length === 0
+        ? undefined
+        : await assertSafeAuditUrl(body.targetUrl);
 
     const integration = await createIntegrationRecord(id, {
       platformKey: platform.key,
@@ -57,7 +66,7 @@ export async function POST(
       },
       settings: {
         demoMode: resolvedDemoMode,
-        targetUrl: body.targetUrl ?? undefined,
+        targetUrl,
         propertyId: body.propertyId ?? undefined,
         ga4PropertyId: body.ga4PropertyId ?? undefined,
         businessAccountId: body.businessAccountId ?? undefined,

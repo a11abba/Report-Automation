@@ -31,7 +31,11 @@ To enable PDF export, run:
 
 - [Phase 1 Readiness](./docs/phase-1-readiness.md)
 - [Phase 2 Roadmap](./docs/phase-2-roadmap.md)
+- [Hostinger Beta Deploy](./docs/hostinger-beta-deploy.md)
 
 ## Environment
 
 Copy [`.env.example`](./.env.example) to `.env.local` and fill in the required values when enabling real Google or PageSpeed connections.
+
+Operator login now requires an explicit allowlist through `AUDIT_OPERATOR_EMAILS` and/or `AUDIT_OPERATOR_DOMAINS`.
+Website target URLs are restricted to public `http` and `https` hosts.

@@ -68,4 +68,39 @@ describe("report rendering", () => {
     expect(html).toContain("Localizações");
     expect(html).toContain("Saude");
   });
+
+  it("renders english copy when the client report language is english", async () => {
+    const englishClient: ClientRecord = {
+      ...client,
+      reportLanguage: "en",
+    };
+    const snapshots = await Promise.all(
+      integrations.map((integration) =>
+        getConnector(integration.platformKey).fetchSnapshot({
+          client: englishClient,
+          integration: {
+            ...integration,
+            clientId: englishClient.id,
+            settings: { ...integration.settings, targetUrl: englishClient.primaryDomain ?? undefined },
+          },
+          requestedCapabilities: getConnector(integration.platformKey).capabilities(),
+        }),
+      ),
+    );
+    const merged = mergeSnapshots(englishClient, snapshots);
+    const report = buildReport("audit_pdf_en", englishClient, merged, evaluateRules(merged), {
+      includedIntegrations: integrations.map((integration) => ({
+        id: integration.id,
+        label: integration.displayName,
+        platformKey: integration.platformKey,
+      })),
+      excludedIntegrations: [],
+    });
+    const html = renderReportHtml(report);
+
+    expect(html).toContain("Multi-Platform Growth Audit");
+    expect(html).toContain("Locations");
+    expect(html).toContain("Healthcare");
+    expect(report.locale).toBe("en");
+  });
 });

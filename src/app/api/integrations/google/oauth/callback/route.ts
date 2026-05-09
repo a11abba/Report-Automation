@@ -1,4 +1,17 @@
+import { NextResponse } from "next/server";
 import { finishGoogleOAuth } from "@/lib/audit-engine";
+import {
+  AUTH_SESSION_COOKIE,
+  GOOGLE_LOGIN_COOKIE,
+  createAuthSessionValue,
+  getLoginCookieOptions,
+  getSessionCookieOptions,
+} from "@/lib/auth-session";
+import {
+  consumeGoogleLoginCallback,
+  readGoogleOAuthState,
+} from "@/lib/google-auth";
+import { assertOperatorAccess } from "@/lib/operator-access";
 
 function renderCallbackPage(payload: Record<string, unknown>) {
   const serialized = JSON.stringify(payload).replaceAll("<", "\\u003c");
@@ -33,8 +46,36 @@ function renderCallbackPage(payload: Record<string, unknown>) {
 }
 
 export async function GET(request: Request) {
+  const url = new URL(request.url);
+
   try {
-    const result = await finishGoogleOAuth(new URL(request.url));
+    const state = await readGoogleOAuthState(url);
+
+    if (state.flow === "login") {
+      const loginCookieValue = request.headers
+        .get("cookie")
+        ?.split(";")
+        .map((item) => item.trim())
+        .find((item) => item.startsWith(`${GOOGLE_LOGIN_COOKIE}=`))
+        ?.slice(`${GOOGLE_LOGIN_COOKIE}=`.length);
+
+      const result = await consumeGoogleLoginCallback(url, loginCookieValue);
+      assertOperatorAccess(result.profile.email);
+      const sessionValue = await createAuthSessionValue({
+        sub: result.profile.sub,
+        email: result.profile.email,
+        name: result.profile.name,
+        picture: result.profile.picture ?? null,
+        locale: result.locale,
+      });
+
+      const response = NextResponse.redirect(new URL("/", request.url), 303);
+      response.cookies.set(AUTH_SESSION_COOKIE, sessionValue, getSessionCookieOptions());
+      response.cookies.set(GOOGLE_LOGIN_COOKIE, "", getLoginCookieOptions(0));
+      return response;
+    }
+
+    const result = await finishGoogleOAuth(url);
     return new Response(renderCallbackPage({ ok: true, ...result }), {
       status: 200,
       headers: {
@@ -42,6 +83,22 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    try {
+      const state = await readGoogleOAuthState(url);
+      if (state.flow === "login") {
+        const loginUrl = new URL("/login", request.url);
+        loginUrl.searchParams.set(
+          "error",
+          error instanceof Error ? error.message : "Google login failed.",
+        );
+        const response = NextResponse.redirect(loginUrl, 303);
+        response.cookies.set(GOOGLE_LOGIN_COOKIE, "", getLoginCookieOptions(0));
+        return response;
+      }
+    } catch {
+      // Fall through to the generic popup response for malformed states.
+    }
+
     return new Response(
       renderCallbackPage({
         ok: false,

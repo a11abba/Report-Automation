@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { AuditPreflightError, createAuditForClient } from "@/lib/audit-engine";
+import { getAuthSession } from "@/lib/auth-session-server";
 
 const auditScopeSchema = z
   .object({
@@ -20,6 +21,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  if (!(await getAuthSession())) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
   try {
     const { id } = await context.params;
     const raw = request.headers.get("content-length") === "0" ? undefined : await request.json().catch(() => undefined);

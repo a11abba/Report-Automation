@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClientRecord } from "@/lib/audit-engine";
+import { reportLanguages } from "@/lib/audit/types";
+import { getAuthSession } from "@/lib/auth-session-server";
+import { assertSafeAuditUrl } from "@/lib/audit-url";
 import { getStore } from "@/lib/storage";
 
 const createClientSchema = z.object({
@@ -9,24 +12,33 @@ const createClientSchema = z.object({
   industryLabelPt: z.string().min(2).nullable().optional(),
   operatingModel: z.enum(["single_source", "composed_source"]),
   primaryDomain: z.string().url().nullable().optional(),
-  reportLanguage: z.enum(["pt-BR", "pt-PT"]).default("pt-BR"),
+  reportLanguage: z.enum(reportLanguages).default("pt-BR"),
 });
 
 export async function GET() {
+  if (!(await getAuthSession())) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
   const store = await getStore();
   const clients = await store.listClients();
   return NextResponse.json({ clients });
 }
 
 export async function POST(request: Request) {
+  if (!(await getAuthSession())) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
   try {
     const body = createClientSchema.parse(await request.json());
+    const primaryDomain = body.primaryDomain
+      ? await assertSafeAuditUrl(body.primaryDomain)
+      : null;
     const client = await createClientRecord({
       name: body.name,
       industry: body.industry,
       industryLabelPt: body.industryLabelPt ?? null,
       operatingModel: body.operatingModel,
-      primaryDomain: body.primaryDomain ?? null,
+      primaryDomain,
       reportLanguage: body.reportLanguage,
     });
     return NextResponse.json({ client }, { status: 201 });

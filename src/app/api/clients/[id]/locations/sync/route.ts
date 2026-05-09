@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import { syncLocationsForClient } from "@/lib/audit-engine";
+import { getAuthSession } from "@/lib/auth-session-server";
 
 export async function POST(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  if (!(await getAuthSession())) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
   try {
     const { id } = await context.params;
     const locations = await syncLocationsForClient(id);

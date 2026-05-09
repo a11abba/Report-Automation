@@ -50,12 +50,18 @@ export class KlaviyoConnector implements PlatformConnector {
   }
 
   async validateCredentials(integration: IntegrationRecord) {
+    const authenticated = Boolean(integration.credentials.apiKey);
     return {
       valid: true,
-      mode: integration.credentials.apiKey ? ("api" as const) : ("demo" as const),
-      message: integration.credentials.apiKey
+      mode: authenticated ? ("api" as const) : ("demo" as const),
+      code: authenticated ? "api_key_present" : "demo_mode",
+      message: authenticated
         ? "API key provided. Connector is ready for a real adapter implementation."
         : "Running in demo mode until a production Klaviyo adapter is added.",
+      environmentConfigured: true,
+      authenticated,
+      resourceSelected: true,
+      liveReady: false,
     };
   }
 
@@ -168,10 +174,16 @@ export class HubSpotConnector implements PlatformConnector {
   }
 
   async validateCredentials(integration: IntegrationRecord) {
+    const authenticated = Boolean(integration.credentials.apiKey);
     return {
       valid: true,
-      mode: integration.credentials.apiKey ? ("api" as const) : ("demo" as const),
+      mode: authenticated ? ("api" as const) : ("demo" as const),
+      code: authenticated ? "api_key_present" : "demo_mode",
       message: "CRM connector scaffolded for multi-platform expansion.",
+      environmentConfigured: true,
+      authenticated,
+      resourceSelected: true,
+      liveReady: false,
     };
   }
 
@@ -217,10 +229,16 @@ export class ShopifyConnector implements PlatformConnector {
   }
 
   async validateCredentials(integration: IntegrationRecord) {
+    const authenticated = Boolean(integration.credentials.apiKey);
     return {
       valid: true,
-      mode: integration.credentials.apiKey ? ("api" as const) : ("demo" as const),
+      mode: authenticated ? ("api" as const) : ("demo" as const),
+      code: authenticated ? "api_key_present" : "demo_mode",
       message: "Commerce/POS connector scaffolded for open API systems.",
+      environmentConfigured: true,
+      authenticated,
+      resourceSelected: true,
+      liveReady: false,
     };
   }
 

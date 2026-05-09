@@ -17,6 +17,10 @@ export const metadata: Metadata = {
   title: "Open API Audit Studio",
   description:
     "Multi-platform audit platform for messaging automation, CRM, and commerce systems.",
+  robots: {
+    index: false,
+    follow: false,
+  },
 };
 
 export default function RootLayout({

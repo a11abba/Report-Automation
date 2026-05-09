@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { beginGoogleOAuth } from "@/lib/audit-engine";
+import { getAuthSession } from "@/lib/auth-session-server";
 
 const schema = z.object({
   platformKey: z.enum([
@@ -14,6 +15,9 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
+  if (!(await getAuthSession())) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  }
   try {
     const body = schema.parse(await request.json());
     const { id } = await context.params;

@@ -2,6 +2,9 @@ import { PgBoss } from "pg-boss";
 import {
   type AuditScope,
   type ClientRecord,
+  type ConnectorMetadataResult,
+  type ConnectorValidationResult,
+  type IntegrationConnectionStatus,
   type IntegrationRecord,
   type LocationRecord,
   type PlatformKey,
@@ -25,6 +28,31 @@ import { logEvent } from "@/services/logger";
 
 const AUDIT_QUEUE_NAME = "audit-run";
 
+function getPgBossDatabaseUrl() {
+  const value = process.env.DATABASE_URL?.trim();
+  if (!value) {
+    return null;
+  }
+
+  if (!/^postgres(ql)?:\/\//i.test(value)) {
+    throw new Error(
+      "DATABASE_URL must point to PostgreSQL for pg-boss. On Hostinger managed Node.js hosting, leave DATABASE_URL empty to run audits inline.",
+    );
+  }
+
+  return value;
+}
+
+function deriveConnectionStatus(
+  mode: "demo" | "api",
+  readyForLiveData: boolean,
+): IntegrationConnectionStatus {
+  if (readyForLiveData) {
+    return "ready";
+  }
+  return mode === "demo" ? "demo" : "attention";
+}
+
 export class AuditPreflightError extends Error {
   code: string;
   status: number;
@@ -37,17 +65,72 @@ export class AuditPreflightError extends Error {
   }
 }
 
-async function getIntegrationExecutionState(integration: IntegrationRecord) {
-  const executableIntegration = await prepareIntegrationForExecution(integration);
-  const connector = getConnector(executableIntegration.platformKey);
-  const validation = await connector.validateCredentials(executableIntegration);
-  const connected = validation.valid && validation.mode === "api";
-  return {
-    integration: executableIntegration,
-    validation,
-    connected,
-    reason: connected ? null : validation.mode === "demo" ? "demo_mode" : "connection_invalid",
-  };
+async function getIntegrationExecutionState(client: ClientRecord, integration: IntegrationRecord) {
+  try {
+    const executableIntegration = await prepareIntegrationForExecution(integration);
+    const connector = getConnector(executableIntegration.platformKey);
+    const validation = await connector.validateCredentials(executableIntegration);
+    let metadata: ConnectorMetadataResult | null = null;
+
+    if (validation.authenticated && connector.discoverMetadata) {
+      try {
+        metadata = await connector.discoverMetadata({
+          client,
+          integration: executableIntegration,
+          requestedCapabilities: connector.capabilities(),
+        });
+      } catch {
+        metadata = null;
+      }
+    }
+
+    const healthCheck =
+      validation.liveReady && connector.healthCheck
+        ? await connector.healthCheck(executableIntegration)
+        : validation.liveReady
+          ? { ok: true, code: "ok", message: validation.message }
+          : null;
+    const readyForLiveData = validation.liveReady && (healthCheck?.ok ?? true);
+    const connectionStatus = deriveConnectionStatus(validation.mode, readyForLiveData);
+
+    return {
+      integration: executableIntegration,
+      validation,
+      metadata,
+      healthCheck,
+      readyForLiveData,
+      connectionStatus,
+      validationMessage: healthCheck && !healthCheck.ok ? healthCheck.message : validation.message,
+    };
+  } catch (error) {
+    const authenticated = Boolean(integration.credentials.accessToken || integration.credentials.apiKey);
+    const fallbackValidation: ConnectorValidationResult = {
+      valid: false,
+      mode: authenticated ? ("api" as const) : ("demo" as const),
+      code: "execution_prepare_failed",
+      message: error instanceof Error ? error.message : "Integration could not be prepared.",
+      environmentConfigured: true,
+      authenticated,
+      resourceSelected: Boolean(
+        integration.settings.ga4PropertyId ||
+          integration.settings.propertyId ||
+          integration.settings.businessAccountId ||
+          integration.settings.businessProfileId ||
+          integration.settings.targetUrl,
+      ),
+      liveReady: false,
+    };
+
+    return {
+      integration,
+      validation: fallbackValidation,
+      metadata: null,
+      healthCheck: null,
+      readyForLiveData: false,
+      connectionStatus: deriveConnectionStatus(fallbackValidation.mode, false),
+      validationMessage: fallbackValidation.message,
+    };
+  }
 }
 
 function isGoogleOAuthIntegration(integration: IntegrationRecord) {
@@ -98,11 +181,14 @@ export async function listDashboardData() {
       const integrations = await store.listIntegrationsByClient(client.id);
       const integrationStates = await Promise.all(
         integrations.map(async (integration) => {
-          const state = await getIntegrationExecutionState(integration);
+          const state = await getIntegrationExecutionState(client, integration);
           return {
             ...integration,
-            connectionStatus: state.connected ? ("connected" as const) : ("demo" as const),
-            validationMessage: state.validation.message,
+            connectionStatus: state.connectionStatus,
+            validationMessage: state.validationMessage,
+            connectionDetails: state.validation,
+            healthCheck: state.healthCheck,
+            metadata: state.metadata,
           };
         }),
       );
@@ -274,6 +360,10 @@ export async function getAuditLocations(auditId: string) {
 
 export async function createAuditForClient(clientId: string, scope?: AuditScope) {
   const store = await getStore();
+  const client = await store.getClient(clientId);
+  if (!client) {
+    throw new Error("Client not found.");
+  }
   const allIntegrations = await store.listIntegrationsByClient(clientId);
   const requestedIntegrations =
     scope?.integrationIds?.length
@@ -283,19 +373,16 @@ export async function createAuditForClient(clientId: string, scope?: AuditScope)
     throw new Error("Create at least one integration before running an audit.");
   }
   const executionStates = await Promise.all(
-    requestedIntegrations.map((integration) => getIntegrationExecutionState(integration)),
+    requestedIntegrations.map((integration) => getIntegrationExecutionState(client, integration)),
   );
-  const eligibleIntegrations = executionStates.filter((state) => state.connected);
+  const eligibleIntegrations = executionStates.filter((state) => state.readyForLiveData);
   const excludedIntegrations = executionStates
-    .filter((state) => !state.connected)
+    .filter((state) => !state.readyForLiveData)
     .map((state) => ({
       id: state.integration.id,
       label: state.integration.displayName,
       platformKey: state.integration.platformKey,
-      reason:
-        state.reason === "demo_mode"
-          ? "Connection is still in demo mode."
-          : state.validation.message,
+      reason: state.validationMessage,
     }));
   if (eligibleIntegrations.length === 0) {
     throw new AuditPreflightError(
@@ -333,8 +420,9 @@ export async function createAuditForClient(clientId: string, scope?: AuditScope)
 }
 
 export async function enqueueAudit(auditId: string) {
-  if (process.env.DATABASE_URL) {
-    const boss = new PgBoss(process.env.DATABASE_URL);
+  const databaseUrl = getPgBossDatabaseUrl();
+  if (databaseUrl) {
+    const boss = new PgBoss(databaseUrl);
     await boss.start();
     await boss.createQueue(AUDIT_QUEUE_NAME).catch(() => undefined);
     await boss.send(AUDIT_QUEUE_NAME, { auditId });
@@ -345,10 +433,11 @@ export async function enqueueAudit(auditId: string) {
 }
 
 export async function startAuditWorker() {
-  if (!process.env.DATABASE_URL) {
+  const databaseUrl = getPgBossDatabaseUrl();
+  if (!databaseUrl) {
     throw new Error("DATABASE_URL is required to run the pg-boss worker.");
   }
-  const boss = new PgBoss(process.env.DATABASE_URL);
+  const boss = new PgBoss(databaseUrl);
   await boss.start();
   await boss.createQueue(AUDIT_QUEUE_NAME).catch(() => undefined);
   await boss.work<{ auditId: string }>(AUDIT_QUEUE_NAME, async (jobs) => {
@@ -380,6 +469,11 @@ export async function updateClientRecord(
   return store.updateClient(clientId, input);
 }
 
+export async function deleteClientRecord(clientId: string) {
+  const store = await getStore();
+  return store.deleteClient(clientId);
+}
+
 export async function createIntegrationRecord(
   clientId: string,
   integration: Pick<
@@ -390,18 +484,27 @@ export async function createIntegrationRecord(
   return createIntegrationWithVault(clientId, integration);
 }
 
+export async function updateIntegrationRecord(
+  integrationId: string,
+  patch: Partial<Pick<IntegrationRecord, "displayName" | "credentials" | "settings">>,
+) {
+  return updateIntegrationWithVault(integrationId, patch);
+}
+
 export async function syncLocationsForClient(clientId: string) {
   const store = await getStore();
   const client = await store.getClient(clientId);
   if (!client) throw new Error("Client not found.");
   const integrations = await store.listIntegrationsByClient(clientId);
   const eligibleIntegrations = (
-    await Promise.all(integrations.map((integration) => getIntegrationExecutionState(integration)))
+    await Promise.all(
+      integrations.map((integration) => getIntegrationExecutionState(client, integration)),
+    )
   )
-    .filter((state) => state.connected)
+    .filter((state) => state.readyForLiveData)
     .map((state) => state.integration);
   if (eligibleIntegrations.length === 0) {
-    return store.upsertLocations(clientId, []);
+    return store.listLocationsByClient(clientId);
   }
   const syncJob = await store.createJob({
     kind: "location_sync",

@@ -4,11 +4,12 @@ import {
   type NormalizedBusinessSnapshot,
   type PlatformType,
 } from "@/lib/audit/types";
+import { fetchWithSafeRedirects } from "./audit-url";
 import { baseSnapshot, getTargetUrl, type ConnectorContext, type PlatformConnector } from "./connectors";
 
 async function fetchText(url: string) {
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithSafeRedirects(url, {
       headers: { "User-Agent": "Open API Audit Studio/0.1" },
       cache: "no-store",
     });
@@ -196,10 +197,16 @@ export class PageSpeedConnector implements PlatformConnector {
 
   async validateCredentials(integration: IntegrationRecord) {
     void integration;
+    const hasApiKey = Boolean(process.env.PAGESPEED_API_KEY);
     return {
       valid: true,
-      mode: process.env.PAGESPEED_API_KEY ? ("api" as const) : ("demo" as const),
-      message: process.env.PAGESPEED_API_KEY ? "PageSpeed API key configured." : "PageSpeed is running in demo mode.",
+      mode: hasApiKey ? ("api" as const) : ("demo" as const),
+      code: hasApiKey ? "api_key_present" : "demo_mode",
+      message: hasApiKey ? "PageSpeed API key configured." : "PageSpeed is running in demo mode.",
+      environmentConfigured: hasApiKey,
+      authenticated: hasApiKey,
+      resourceSelected: true,
+      liveReady: hasApiKey,
     };
   }
 
@@ -229,7 +236,12 @@ export class WebsiteCrawlerConnector implements PlatformConnector {
     return {
       valid: true,
       mode: "api" as const,
+      code: "public_access",
       message: "Crawler uses public website access and does not require platform auth.",
+      environmentConfigured: true,
+      authenticated: true,
+      resourceSelected: true,
+      liveReady: true,
     };
   }
 

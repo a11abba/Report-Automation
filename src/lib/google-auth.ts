@@ -5,17 +5,40 @@ import {
   type OAuthSessionRecord,
   type PlatformKey,
 } from "@/lib/audit/types";
+import {
+  createGoogleLoginCookieValue,
+  readGoogleLoginCookieValue,
+  type AppLocale,
+} from "@/lib/auth-session";
 import { getStore } from "@/lib/storage";
 import { createHmac } from "@/services/app-secret";
 
 const GOOGLE_AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo";
 
-interface OAuthStatePayload {
+interface IntegrationOAuthStatePayload {
+  flow: "integration";
   sessionId: string;
   clientId: string;
   platformKey: PlatformKey;
   expiresAt: string;
+}
+
+interface LoginOAuthStatePayload {
+  flow: "login";
+  nonce: string;
+  locale: AppLocale;
+  expiresAt: string;
+}
+
+type OAuthStatePayload = IntegrationOAuthStatePayload | LoginOAuthStatePayload;
+
+interface GoogleIdentity {
+  sub: string;
+  email: string;
+  name: string;
+  picture?: string;
 }
 
 function assertGooglePlatform(platformKey: PlatformKey) {
@@ -58,6 +81,15 @@ async function decodeOAuthState(state: string) {
     throw new Error("OAuth state verification failed.");
   }
   return JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf-8")) as OAuthStatePayload;
+}
+
+export async function readGoogleOAuthState(url: URL) {
+  const state = url.searchParams.get("state");
+  if (!state) {
+    throw new Error("Missing OAuth state.");
+  }
+
+  return decodeOAuthState(state);
 }
 
 function getRedirectUri() {
@@ -114,6 +146,7 @@ export async function buildGoogleOAuthUrl(
     expiresAt,
   });
   const state = await encodeOAuthState({
+    flow: "integration",
     sessionId: session.id,
     clientId,
     platformKey,
@@ -136,6 +169,45 @@ export async function buildGoogleOAuthUrl(
     state,
     redirectUri,
     scopes,
+  };
+}
+
+export async function buildGoogleLoginUrl(locale: AppLocale) {
+  const googleClientId = process.env.GOOGLE_CLIENT_ID;
+
+  if (!googleClientId) {
+    throw new Error("GOOGLE_CLIENT_ID is not configured.");
+  }
+
+  const redirectUri = getRedirectUri();
+  const codeVerifier = createCodeVerifier();
+  const nonce = crypto.randomUUID().replaceAll("-", "");
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+  const state = await encodeOAuthState({
+    flow: "login",
+    nonce,
+    locale,
+    expiresAt,
+  });
+  const loginCookieValue = await createGoogleLoginCookieValue({
+    nonce,
+    codeVerifier,
+    locale,
+  });
+
+  const authUrl = new URL(GOOGLE_AUTH_BASE);
+  authUrl.searchParams.set("client_id", googleClientId);
+  authUrl.searchParams.set("redirect_uri", redirectUri);
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("scope", ["openid", "email", "profile"].join(" "));
+  authUrl.searchParams.set("state", state);
+  authUrl.searchParams.set("code_challenge", createCodeChallenge(codeVerifier));
+  authUrl.searchParams.set("code_challenge_method", "S256");
+
+  return {
+    authUrl: authUrl.toString(),
+    loginCookieValue,
+    expiresAt,
   };
 }
 
@@ -211,6 +283,31 @@ export async function refreshGoogleAccessToken(
   };
 }
 
+async function fetchGoogleIdentity(accessToken: string): Promise<GoogleIdentity> {
+  const response = await fetch(GOOGLE_USERINFO_ENDPOINT, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(text || "Failed to read Google account profile.");
+  }
+
+  const payload = (await response.json()) as Partial<GoogleIdentity>;
+  if (!payload.sub || !payload.email || !payload.name) {
+    throw new Error("Google account profile is incomplete.");
+  }
+
+  return {
+    sub: payload.sub,
+    email: payload.email,
+    name: payload.name,
+    picture: payload.picture,
+  };
+}
+
 export async function consumeGoogleOAuthCallback(url: URL): Promise<{
   clientId: string;
   platformKey: PlatformKey;
@@ -219,12 +316,10 @@ export async function consumeGoogleOAuthCallback(url: URL): Promise<{
   credentials: IntegrationCredentials | null;
 }> {
   const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state");
-  if (!state) {
-    throw new Error("Missing OAuth state.");
+  const parsedState = await readGoogleOAuthState(url);
+  if (parsedState.flow !== "integration") {
+    throw new Error("OAuth state does not belong to an integration flow.");
   }
-
-  const parsedState = await decodeOAuthState(state);
   const store = await getStore();
   const session = await store.getOAuthSession(parsedState.sessionId);
   if (!session) {
@@ -257,5 +352,42 @@ export async function consumeGoogleOAuthCallback(url: URL): Promise<{
     scopes: session.scopes,
     session,
     credentials,
+  };
+}
+
+export async function consumeGoogleLoginCallback(url: URL, loginCookieValue?: string | null) {
+  const code = url.searchParams.get("code");
+  if (!code) {
+    throw new Error("Missing Google authorization code.");
+  }
+
+  const parsedState = await readGoogleOAuthState(url);
+  if (parsedState.flow !== "login") {
+    throw new Error("OAuth state does not belong to a login flow.");
+  }
+
+  if (new Date(parsedState.expiresAt).getTime() <= Date.now()) {
+    throw new Error("Google login session expired.");
+  }
+
+  const loginCookie = await readGoogleLoginCookieValue(loginCookieValue);
+  if (!loginCookie || loginCookie.flow !== "login") {
+    throw new Error("Google login session was not found.");
+  }
+
+  if (loginCookie.nonce !== parsedState.nonce) {
+    throw new Error("Google login session did not match the callback.");
+  }
+
+  const credentials = await exchangeGoogleCode(code, loginCookie.codeVerifier);
+  if (!credentials.accessToken) {
+    throw new Error("Google did not return an access token.");
+  }
+
+  const profile = await fetchGoogleIdentity(credentials.accessToken);
+
+  return {
+    locale: parsedState.locale,
+    profile,
   };
 }

@@ -58,6 +58,7 @@ export const integrationAuthOrigins = [
   "service_account",
 ] as const;
 export const reportLanguages = ["pt-BR", "pt-PT", "en"] as const;
+export const integrationConnectionStatuses = ["demo", "attention", "ready"] as const;
 
 export type PlatformType = (typeof platformTypes)[number];
 export type PlatformKey = (typeof platformKeys)[number];
@@ -67,6 +68,7 @@ export type FindingStatus = (typeof findingStatuses)[number];
 export type SupportState = (typeof supportStates)[number];
 export type IntegrationAuthOrigin = (typeof integrationAuthOrigins)[number];
 export type ReportLanguage = (typeof reportLanguages)[number];
+export type IntegrationConnectionStatus = (typeof integrationConnectionStatuses)[number];
 
 export type MetricUnit =
   | "count"
@@ -466,6 +468,34 @@ export interface IntegrationCredentials {
   scopes?: string[];
   serviceAccountEmail?: string;
   accountHint?: string;
+}
+
+export interface ConnectorValidationResult {
+  valid: boolean;
+  mode: "demo" | "api";
+  code: string;
+  message: string;
+  environmentConfigured: boolean;
+  authenticated: boolean;
+  resourceSelected: boolean;
+  liveReady: boolean;
+}
+
+export interface ConnectorHealthCheckResult {
+  ok: boolean;
+  code: string;
+  message: string;
+}
+
+export interface IntegrationPropertySummary {
+  resourceName: string;
+  propertyId: string;
+  displayName: string;
+  parentAccountName: string | null;
+}
+
+export interface ConnectorMetadataResult {
+  propertySummaries?: IntegrationPropertySummary[];
 }
 
 export interface CredentialSecretPayload {

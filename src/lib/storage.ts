@@ -1,5 +1,4 @@
 import { access, mkdir, readFile } from "node:fs/promises";
-import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   type AuditEventRecord,
@@ -13,6 +12,7 @@ import {
   type LocationRecord,
   type OAuthSessionRecord,
 } from "@/lib/audit/types";
+import { getAuditDataDir, getAuditDataFile } from "@/lib/runtime-paths";
 
 interface LegacyStoreShape {
   clients: ClientRecord[];
@@ -59,6 +59,7 @@ export interface AppStore {
       >
     >,
   ): Promise<ClientRecord | null>;
+  deleteClient(id: string): Promise<ClientRecord | null>;
   listIntegrationsByClient(clientId: string): Promise<IntegrationRecord[]>;
   getIntegration(id: string): Promise<IntegrationRecord | null>;
   createIntegration(
@@ -97,9 +98,9 @@ export interface AppStore {
   listJobs(filter?: { kind?: JobKind; status?: JobStatus }): Promise<JobRecord[]>;
 }
 
-const dataDir = path.join(process.cwd(), "data");
-const sqliteFile = path.join(dataDir, "app.db");
-const legacyJsonFile = path.join(dataDir, "app-db.json");
+const dataDir = getAuditDataDir();
+const sqliteFile = getAuditDataFile("app.db");
+const legacyJsonFile = getAuditDataFile("app-db.json");
 
 function createId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 18)}`;
@@ -500,6 +501,39 @@ class SQLiteStore implements AppStore {
       id,
     );
     return next;
+  }
+
+  async deleteClient(id: string) {
+    await this.ensureMigrated();
+    const current = await this.getClient(id);
+    if (!current) return null;
+
+    const audits = await this.listAuditsByClient(id);
+    const auditIds = audits.map((audit) => audit.id);
+    const jobs = await this.listJobs();
+
+    for (const auditId of auditIds) {
+      this.db.prepare("delete from audit_reports where audit_id = ?").run(auditId);
+      this.db.prepare("delete from audit_events where audit_id = ?").run(auditId);
+    }
+
+    for (const job of jobs) {
+      const payload = job.payload ?? {};
+      const payloadAuditId =
+        typeof payload["auditId"] === "string" ? payload["auditId"] : null;
+      const payloadClientId =
+        typeof payload["clientId"] === "string" ? payload["clientId"] : null;
+      if (payloadClientId === id || (payloadAuditId && auditIds.includes(payloadAuditId))) {
+        this.db.prepare("delete from jobs where id = ?").run(job.id);
+      }
+    }
+
+    this.db.prepare("delete from oauth_sessions where client_id = ?").run(id);
+    this.db.prepare("delete from locations where client_id = ?").run(id);
+    this.db.prepare("delete from integrations where client_id = ?").run(id);
+    this.db.prepare("delete from audits where client_id = ?").run(id);
+    this.db.prepare("delete from clients where id = ?").run(id);
+    return current;
   }
 
   async listIntegrationsByClient(clientId: string) {

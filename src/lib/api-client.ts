@@ -35,3 +35,15 @@ export async function patchJson<T>(url: string, body: Record<string, unknown>) {
   }
   return payload as T;
 }
+
+export async function deleteJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error ?? "Request failed");
+  }
+  return payload as T;
+}

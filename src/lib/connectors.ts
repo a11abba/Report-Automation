@@ -1,6 +1,9 @@
 import {
   type AuditCapability,
   type ClientRecord,
+  type ConnectorHealthCheckResult,
+  type ConnectorMetadataResult,
+  type ConnectorValidationResult,
   type IntegrationRecord,
   type NormalizedBusinessSnapshot,
   type PlatformDefinition,
@@ -34,17 +37,9 @@ export interface PlatformConnector {
   key: PlatformKey;
   platformType(): PlatformType;
   capabilities(): AuditCapability[];
-  validateCredentials(integration: IntegrationRecord): Promise<{
-    valid: boolean;
-    mode: "demo" | "api";
-    message: string;
-  }>;
-  discoverMetadata?(context: ConnectorContext): Promise<Record<string, unknown>>;
-  healthCheck?(integration: IntegrationRecord): Promise<{
-    ok: boolean;
-    code: string;
-    message: string;
-  }>;
+  validateCredentials(integration: IntegrationRecord): Promise<ConnectorValidationResult>;
+  discoverMetadata?(context: ConnectorContext): Promise<ConnectorMetadataResult>;
+  healthCheck?(integration: IntegrationRecord): Promise<ConnectorHealthCheckResult>;
   fetchSnapshot(context: ConnectorContext): Promise<NormalizedBusinessSnapshot>;
 }
 
