@@ -22,6 +22,7 @@ import {
   KlaviyoConnector,
   ShopifyConnector,
 } from "./legacy-connectors";
+import { MetaAdsConnector } from "./meta-connectors";
 import {
   PageSpeedConnector,
   WebsiteCrawlerConnector,
@@ -98,6 +99,7 @@ export function baseSnapshot(
       primaryDomain: client.primaryDomain ?? null,
     },
     campaigns: null,
+    paidMedia: null,
     automations: null,
     audiences: null,
     deliverability: null,
@@ -138,6 +140,7 @@ const connectors: Record<PlatformKey, PlatformConnector> = {
   google_analytics: new GoogleAnalyticsConnector(),
   pagespeed_insights: new PageSpeedConnector(),
   website_crawler: new WebsiteCrawlerConnector(),
+  meta_ads: new MetaAdsConnector(),
 };
 
 export const platformCatalog: PlatformDefinition[] = [
@@ -194,6 +197,15 @@ export const platformCatalog: PlatformDefinition[] = [
     capabilities: connectors.google_analytics.capabilities(),
     authModes: ["oauth", "service_account", "none"],
     description: "Traffic quality, channel mix, landing pages, and conversion performance.",
+  },
+  {
+    key: "meta_ads",
+    type: "paid_media",
+    name: "Meta Ads",
+    launchStage: "live",
+    capabilities: connectors.meta_ads.capabilities(),
+    authModes: ["api_key", "oauth"],
+    description: "Paid media reporting for Facebook and Instagram campaigns with spend, conversion, and ROAS diagnostics.",
   },
   {
     key: "pagespeed_insights",
@@ -259,6 +271,7 @@ export function mergeSnapshots(
       primaryDomain: client.primaryDomain ?? null,
     },
     campaigns: snapshots.find((snapshot) => snapshot.campaigns)?.campaigns ?? null,
+    paidMedia: snapshots.find((snapshot) => snapshot.paidMedia)?.paidMedia ?? null,
     automations: snapshots.find((snapshot) => snapshot.automations)?.automations ?? null,
     audiences: snapshots.map((snapshot) => snapshot.audiences).filter(Boolean).reduce((acc, item) => {
       if (!item) return acc;

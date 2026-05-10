@@ -12,6 +12,7 @@ const client: ClientRecord = {
   operatingModel: "composed_source",
   primaryDomain: "https://aurora.example",
   reportLanguage: "pt-PT",
+  reportFocus: "full_funnel",
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };

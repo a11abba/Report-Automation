@@ -1,6 +1,7 @@
 import { accessSync, constants } from "node:fs";
 import { chromium } from "playwright";
 import { type AuditReportPayload } from "@/lib/audit/types";
+import { getReportFocusLabel } from "./report-focus";
 import { localizeReportLabel } from "./report-i18n";
 
 function formatPercent(locale: AuditReportPayload["locale"], value: number | null | undefined) {
@@ -94,6 +95,22 @@ export function renderReportHtml(report: AuditReportPayload): string {
     )
     .join("");
 
+  const paidCampaignRows = report.snapshot.paidMedia?.topCampaigns
+    ?.map(
+      (campaign) => `
+        <tr>
+          <td>${escapeHtml(campaign.name)}</td>
+          <td>${formatNumber(report.locale, campaign.spend, 2)}</td>
+          <td>${formatNumber(report.locale, campaign.impressions)}</td>
+          <td>${formatNumber(report.locale, campaign.clicks)}</td>
+          <td>${formatPercent(report.locale, campaign.ctr)}</td>
+          <td>${formatNumber(report.locale, campaign.purchases)}</td>
+          <td>${formatNumber(report.locale, campaign.roas, 2)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+
   return `
     <!DOCTYPE html>
     <html lang="${report.locale}">
@@ -120,6 +137,7 @@ export function renderReportHtml(report: AuditReportPayload): string {
           <p>${escapeHtml(labels.title)}</p>
           <h1>${escapeHtml(report.clientName)}</h1>
           <p>${escapeHtml(report.clientIndustryLabel)} • ${escapeHtml(report.snapshot.platformLabels.join(", "))}</p>
+          <p>${escapeHtml(labels.reportFocus)}: ${escapeHtml(getReportFocusLabel(report.locale, report.reportFocus))}</p>
           <p>${escapeHtml(labels.generated)} ${escapeHtml(new Date(report.generatedAt).toLocaleString(report.locale))}</p>
         </section>
         <section class="grid">
@@ -156,9 +174,26 @@ export function renderReportHtml(report: AuditReportPayload): string {
             <tbody>${acquisitionRows}</tbody>
           </table>
         ` : ""}
+        ${paidCampaignRows ? `
+          <table>
+            <thead>
+              <tr>
+                <th>${escapeHtml(labels.paidMediaSummary)}</th>
+                <th>${escapeHtml(labels.spend)}</th>
+                <th>${escapeHtml(labels.impressions)}</th>
+                <th>${escapeHtml(labels.clicks)}</th>
+                <th>${escapeHtml(labels.ctr)}</th>
+                <th>${escapeHtml(labels.purchases)}</th>
+                <th>${escapeHtml(labels.roas)}</th>
+              </tr>
+            </thead>
+            <tbody>${paidCampaignRows}</tbody>
+          </table>
+        ` : ""}
         <section class="card" style="margin-top: 20px;">
           <h2>${escapeHtml(labels.snapshotHighlights)}</h2>
           ${acquisitionRows ? `<p><strong>${escapeHtml(labels.acquisitionCrosswalk)}:</strong> ${escapeHtml(labels.source)} + ${escapeHtml(labels.medium)} + outcome (${escapeHtml(labels.pageViews)}, ${escapeHtml(labels.keyEvents)}, ${escapeHtml(labels.revenue)}).</p>` : ""}
+          ${report.snapshot.paidMedia ? `<p><strong>${escapeHtml(labels.paidMediaSummary)}:</strong> ${escapeHtml(labels.spend)} ${formatNumber(report.locale, report.snapshot.paidMedia.spend, 2)} • ${escapeHtml(labels.purchases)} ${formatNumber(report.locale, report.snapshot.paidMedia.purchases)} • ${escapeHtml(labels.roas)} ${formatNumber(report.locale, report.snapshot.paidMedia.roas, 2)}</p>` : ""}
           <p>${escapeHtml(labels.organicCtr)}: ${formatPercent(report.locale, report.snapshot.search?.ctr)}</p>
           <p>${escapeHtml(labels.averageRating)}: ${report.snapshot.reputation?.averageRating?.toFixed(1) ?? "N/A"}</p>
           <p>${escapeHtml(labels.ga4ConversionRate)}: ${formatPercent(report.locale, report.snapshot.trafficAttribution?.conversionRate)}</p>

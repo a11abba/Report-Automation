@@ -13,6 +13,7 @@ const updateIntegrationSchema = z.object({
   ga4PropertyId: z.string().nullable().optional(),
   businessAccountId: z.string().nullable().optional(),
   businessProfileId: z.string().nullable().optional(),
+  adAccountId: z.string().nullable().optional(),
   serviceAccountEmail: z.string().nullable().optional(),
 });
 
@@ -39,6 +40,14 @@ export async function PATCH(
         : body.targetUrl === null || body.targetUrl.trim().length === 0
           ? null
           : await assertSafeAuditUrl(body.targetUrl);
+    const settingsPatch: NonNullable<Parameters<typeof updateIntegrationRecord>[1]["settings"]> = {};
+    if (body.demoMode !== undefined) settingsPatch.demoMode = body.demoMode;
+    if (body.targetUrl !== undefined) settingsPatch.targetUrl = targetUrl;
+    if (body.propertyId !== undefined) settingsPatch.propertyId = body.propertyId;
+    if (body.ga4PropertyId !== undefined) settingsPatch.ga4PropertyId = body.ga4PropertyId;
+    if (body.businessAccountId !== undefined) settingsPatch.businessAccountId = body.businessAccountId;
+    if (body.businessProfileId !== undefined) settingsPatch.businessProfileId = body.businessProfileId;
+    if (body.adAccountId !== undefined) settingsPatch.adAccountId = body.adAccountId;
 
     const integration = await updateIntegrationRecord(integrationId, {
       displayName: body.displayName,
@@ -46,14 +55,7 @@ export async function PATCH(
         body.serviceAccountEmail === undefined
           ? undefined
           : { serviceAccountEmail: body.serviceAccountEmail ?? undefined },
-      settings: {
-        demoMode: body.demoMode,
-        targetUrl: targetUrl ?? undefined,
-        propertyId: body.propertyId ?? undefined,
-        ga4PropertyId: body.ga4PropertyId ?? undefined,
-        businessAccountId: body.businessAccountId ?? undefined,
-        businessProfileId: body.businessProfileId ?? undefined,
-      },
+      settings: settingsPatch,
     });
 
     if (!integration) {

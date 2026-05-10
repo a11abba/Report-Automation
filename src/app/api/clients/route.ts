@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClientRecord } from "@/lib/audit-engine";
-import { reportLanguages } from "@/lib/audit/types";
+import { reportFocuses, reportLanguages } from "@/lib/audit/types";
 import { getAuthSession } from "@/lib/auth-session-server";
 import { assertSafeAuditUrl } from "@/lib/audit-url";
 import { getStore } from "@/lib/storage";
@@ -13,6 +13,7 @@ const createClientSchema = z.object({
   operatingModel: z.enum(["single_source", "composed_source"]),
   primaryDomain: z.string().url().nullable().optional(),
   reportLanguage: z.enum(reportLanguages).default("pt-BR"),
+  reportFocus: z.enum(reportFocuses).default("full_funnel"),
 });
 
 export async function GET() {
@@ -40,6 +41,7 @@ export async function POST(request: Request) {
       operatingModel: body.operatingModel,
       primaryDomain,
       reportLanguage: body.reportLanguage,
+      reportFocus: body.reportFocus,
     });
     return NextResponse.json({ client }, { status: 201 });
   } catch (error) {

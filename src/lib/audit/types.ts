@@ -6,6 +6,7 @@ export const platformTypes = [
   "local_presence",
   "web_analytics",
   "website_intelligence",
+  "paid_media",
 ] as const;
 
 export const platformKeys = [
@@ -22,6 +23,7 @@ export const platformKeys = [
   "google_analytics",
   "pagespeed_insights",
   "website_crawler",
+  "meta_ads",
 ] as const;
 
 export const auditCapabilities = [
@@ -41,6 +43,7 @@ export const auditCapabilities = [
   "site_performance",
   "technical_seo",
   "location_rollup",
+  "paid_media_performance",
 ] as const;
 
 export const findingSeverities = ["critical", "high", "medium", "low"] as const;
@@ -58,6 +61,12 @@ export const integrationAuthOrigins = [
   "service_account",
 ] as const;
 export const reportLanguages = ["pt-BR", "pt-PT", "en"] as const;
+export const reportFocuses = [
+  "full_funnel",
+  "lifecycle_marketing",
+  "seo_local",
+  "paid_media",
+] as const;
 export const integrationConnectionStatuses = ["demo", "attention", "ready"] as const;
 
 export type PlatformType = (typeof platformTypes)[number];
@@ -68,6 +77,7 @@ export type FindingStatus = (typeof findingStatuses)[number];
 export type SupportState = (typeof supportStates)[number];
 export type IntegrationAuthOrigin = (typeof integrationAuthOrigins)[number];
 export type ReportLanguage = (typeof reportLanguages)[number];
+export type ReportFocus = (typeof reportFocuses)[number];
 export type IntegrationConnectionStatus = (typeof integrationConnectionStatuses)[number];
 
 export type MetricUnit =
@@ -112,6 +122,39 @@ export interface CampaignAnalyticsSection {
     spamComplaintRate: AuditedMetric;
     unsubscribeRate: AuditedMetric;
   };
+}
+
+export interface PaidMediaCampaignSnapshot {
+  id: string;
+  name: string;
+  status: string | null;
+  spend: number;
+  impressions: number;
+  reach: number;
+  clicks: number;
+  ctr: number | null;
+  cpc: number | null;
+  cpm: number | null;
+  purchases: number;
+  purchaseValue: number;
+  roas: number | null;
+}
+
+export interface PaidMediaSection {
+  supportState: SupportState;
+  adAccountId: string | null;
+  accountCurrency: string | null;
+  spend: number;
+  impressions: number;
+  reach: number;
+  clicks: number;
+  ctr: number | null;
+  cpc: number | null;
+  cpm: number | null;
+  purchases: number;
+  purchaseValue: number;
+  roas: number | null;
+  topCampaigns: PaidMediaCampaignSnapshot[];
 }
 
 export interface AutomationFlowSnapshot {
@@ -359,6 +402,7 @@ export interface NormalizedBusinessSnapshot {
     primaryDomain: string | null;
   };
   campaigns: CampaignAnalyticsSection | null;
+  paidMedia: PaidMediaSection | null;
   automations: AutomationSection | null;
   audiences: AudienceSection | null;
   deliverability: DeliverabilitySection | null;
@@ -395,7 +439,8 @@ export interface AuditFinding {
     | "reviews_reputation"
     | "website_performance"
     | "technical_seo"
-    | "traffic_quality";
+    | "traffic_quality"
+    | "paid_media_performance";
   section: string;
   severity: FindingSeverity;
   status: FindingStatus;
@@ -429,6 +474,7 @@ export interface AuditReportPayload {
   clientId: string;
   clientName: string;
   clientIndustryLabel: string;
+  reportFocus: ReportFocus;
   generatedAt: string;
   locale: ReportLanguage;
   score: number;
@@ -466,6 +512,7 @@ export interface ClientRecord {
   operatingModel: "single_source" | "composed_source";
   primaryDomain: string | null;
   reportLanguage: ReportLanguage;
+  reportFocus: ReportFocus;
   createdAt: string;
   updatedAt: string;
 }
@@ -537,11 +584,12 @@ export type JobStatus = (typeof jobStatuses)[number];
 
 export interface IntegrationSettings {
   demoMode?: boolean;
-  targetUrl?: string;
-  propertyId?: string;
-  businessAccountId?: string;
-  businessProfileId?: string;
-  ga4PropertyId?: string;
+  targetUrl?: string | null;
+  propertyId?: string | null;
+  businessAccountId?: string | null;
+  businessProfileId?: string | null;
+  ga4PropertyId?: string | null;
+  adAccountId?: string | null;
   locationIds?: string[];
   extensionContext?: {
     detectedUrl?: string;

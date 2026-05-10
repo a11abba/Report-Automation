@@ -4,6 +4,7 @@ import {
   type ClientRecord,
   type LocationScore,
   type NormalizedBusinessSnapshot,
+  type ReportFocus,
   type RulePackMetadata,
   type SectionScore,
 } from "@/lib/audit/types";
@@ -13,6 +14,7 @@ import {
   localizeLocationNotes,
   localizeSectionScoreLabel,
 } from "./report-i18n";
+import { getCategoriesForReportFocus } from "./report-focus";
 
 const severityPenalty: Record<AuditFinding["severity"], number> = {
   critical: 20,
@@ -36,6 +38,7 @@ const sectionCatalog = [
   { id: "website_performance", weight: 7 },
   { id: "technical_seo", weight: 7 },
   { id: "traffic_quality", weight: 8 },
+  { id: "paid_media_performance", weight: 10 },
 ] as const;
 
 export const rulePackCatalog: RulePackMetadata[] = [
@@ -107,6 +110,14 @@ export const rulePackCatalog: RulePackMetadata[] = [
     families: ["integration_health", "data_quality", "commerce_revenue_attribution"],
     platformTypes: ["commerce_pos"],
     capabilities: ["commerce_catalog", "orders_revenue", "event_tracking"],
+  },
+  {
+    id: "paid-media-core",
+    name: "Paid Media Core",
+    version: "1.0.0",
+    families: ["paid_media_performance", "traffic_quality", "website_performance"],
+    platformTypes: ["paid_media"],
+    capabilities: ["paid_media_performance"],
   },
 ];
 
@@ -279,6 +290,74 @@ export function evaluateRules(snapshot: NormalizedBusinessSnapshot): AuditFindin
     }
   }
 
+  if (snapshot.paidMedia) {
+    if (snapshot.paidMedia.spend > 0 && snapshot.paidMedia.purchases === 0) {
+      pushFinding(findings, {
+        code: "paid.no-purchases",
+        sectionKey: "paid_media",
+        category: "paid_media_performance",
+        section: "",
+        severity: "critical",
+        status: "failing",
+        params: {
+          spend: snapshot.paidMedia.spend,
+          purchases: snapshot.paidMedia.purchases,
+        },
+        sourcePlatforms: ["meta_ads"],
+      });
+    }
+    if ((snapshot.paidMedia.ctr ?? 0) < 0.01 && snapshot.paidMedia.impressions > 10000) {
+      pushFinding(findings, {
+        code: "paid.ctr",
+        sectionKey: "paid_media",
+        category: "paid_media_performance",
+        section: "",
+        severity: "high",
+        status: "watch",
+        params: {
+          ctr: snapshot.paidMedia.ctr ?? 0,
+          impressions: snapshot.paidMedia.impressions,
+        },
+        sourcePlatforms: ["meta_ads"],
+      });
+    }
+    if ((snapshot.paidMedia.roas ?? 0) < 1.5 && snapshot.paidMedia.spend >= 1000) {
+      pushFinding(findings, {
+        code: "paid.roas",
+        sectionKey: "paid_media",
+        category: "paid_media_performance",
+        section: "",
+        severity: "high",
+        status: "watch",
+        params: {
+          roas: snapshot.paidMedia.roas ?? 0,
+          spend: snapshot.paidMedia.spend,
+        },
+        sourcePlatforms: ["meta_ads"],
+      });
+    }
+    const heavyCampaign = snapshot.paidMedia.topCampaigns.find((campaign) =>
+      snapshot.paidMedia && snapshot.paidMedia.spend > 0
+        ? campaign.spend / snapshot.paidMedia.spend > 0.7
+        : false,
+    );
+    if (heavyCampaign && snapshot.paidMedia.spend > 0) {
+      pushFinding(findings, {
+        code: "paid.concentration",
+        sectionKey: "paid_media",
+        category: "paid_media_performance",
+        section: "",
+        severity: "medium",
+        status: "watch",
+        params: {
+          campaign: heavyCampaign.name,
+          spendShare: heavyCampaign.spend / snapshot.paidMedia.spend,
+        },
+        sourcePlatforms: ["meta_ads"],
+      });
+    }
+  }
+
   if (snapshot.locations.length > 1) {
     const ratings = snapshot.locations.map((location) => location.metrics.averageRating).filter((value): value is number => typeof value === "number");
     if (ratings.length > 1 && Math.max(...ratings) - Math.min(...ratings) > 0.5) {
@@ -339,8 +418,14 @@ function scoreLocations(snapshot: NormalizedBusinessSnapshot): LocationScore[] {
   });
 }
 
-export function scoreAudit(snapshot: NormalizedBusinessSnapshot, findings: AuditFinding[]) {
+export function scoreAudit(
+  snapshot: NormalizedBusinessSnapshot,
+  findings: AuditFinding[],
+  focus: ReportFocus,
+) {
+  const allowedCategories = getCategoriesForReportFocus(focus);
   const supported = sectionCatalog.filter((section) => {
+    if (!allowedCategories.has(section.id)) return false;
     if (section.id === "channel_performance") return Boolean(snapshot.campaigns);
     if (section.id === "deliverability") return Boolean(snapshot.deliverability);
     if (section.id === "automation_coverage") return Boolean(snapshot.automations);
@@ -355,6 +440,7 @@ export function scoreAudit(snapshot: NormalizedBusinessSnapshot, findings: Audit
     if (section.id === "website_performance") return Boolean(snapshot.website);
     if (section.id === "technical_seo") return Boolean(snapshot.website);
     if (section.id === "traffic_quality") return Boolean(snapshot.trafficAttribution);
+    if (section.id === "paid_media_performance") return Boolean(snapshot.paidMedia);
     return false;
   });
 
@@ -378,8 +464,14 @@ export function buildReport(
   execution: AuditReportPayload["execution"],
 ): AuditReportPayload {
   const locale = client.reportLanguage;
-  const localizedFindings = findings.map((finding) => localizeFinding(locale, finding));
-  const { score, grade, sectionScores, locationScores } = scoreAudit(snapshot, localizedFindings);
+  const relevantCategories = getCategoriesForReportFocus(client.reportFocus);
+  const filteredFindings = findings.filter((finding) => relevantCategories.has(finding.category));
+  const localizedFindings = filteredFindings.map((finding) => localizeFinding(locale, finding));
+  const { score, grade, sectionScores, locationScores } = scoreAudit(
+    snapshot,
+    localizedFindings,
+    client.reportFocus,
+  );
   const localizedSectionScores = sectionScores.map((section) => ({
     ...section,
     label: localizeSectionScoreLabel(locale, section.id),
@@ -396,6 +488,7 @@ export function buildReport(
     clientId: snapshot.clientId,
     clientName: snapshot.clientName,
     clientIndustryLabel: getClientIndustryLabel(client, locale),
+    reportFocus: client.reportFocus,
     generatedAt: snapshot.generatedAt,
     locale,
     score,

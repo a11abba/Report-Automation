@@ -116,6 +116,7 @@ async function getIntegrationExecutionState(client: ClientRecord, integration: I
           integration.settings.propertyId ||
           integration.settings.businessAccountId ||
           integration.settings.businessProfileId ||
+          integration.settings.adAccountId ||
           integration.settings.targetUrl,
       ),
       liveReady: false,
@@ -452,7 +453,7 @@ export async function startAuditWorker() {
 export async function createClientRecord(
   input: Pick<
     ClientRecord,
-    "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage"
+    "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus"
   >,
 ) {
   const store = await getStore();
@@ -462,7 +463,7 @@ export async function createClientRecord(
 export async function updateClientRecord(
   clientId: string,
   input: Partial<
-    Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage">
+    Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus">
   >,
 ) {
   const store = await getStore();

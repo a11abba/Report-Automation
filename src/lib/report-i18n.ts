@@ -60,6 +60,17 @@ export const reportLabels = {
     ga4ConversionRate: "GA4 conversion rate",
     websitePerformanceScore: "Website performance score",
     campaignOpenRate: "Campaign open rate",
+    paidMediaSummary: "Paid media summary",
+    spend: "Spend",
+    impressions: "Impressions",
+    reach: "Reach",
+    clicks: "Clicks",
+    ctr: "CTR",
+    cpc: "CPC",
+    cpm: "CPM",
+    purchases: "Purchases",
+    roas: "ROAS",
+    reportFocus: "Report focus",
     noStrengths: "No major strengths were detected in this run.",
     healthyBaseline: "Healthy baseline.",
   },
@@ -89,6 +100,17 @@ export const reportLabels = {
     ga4ConversionRate: "Taxa de conversão do GA4",
     websitePerformanceScore: "Score de performance do site",
     campaignOpenRate: "Taxa de abertura de campanhas",
+    paidMediaSummary: "Resumo de mídia paga",
+    spend: "Investimento",
+    impressions: "Impressões",
+    reach: "Alcance",
+    clicks: "Cliques",
+    ctr: "CTR",
+    cpc: "CPC",
+    cpm: "CPM",
+    purchases: "Compras",
+    roas: "ROAS",
+    reportFocus: "Foco do relatório",
     noStrengths: "Nenhum ponto forte relevante foi detectado nesta execução.",
     healthyBaseline: "Base saudável.",
   },
@@ -118,6 +140,17 @@ export const reportLabels = {
     ga4ConversionRate: "Taxa de conversão do GA4",
     websitePerformanceScore: "Score de performance do site",
     campaignOpenRate: "Taxa de abertura de campanhas",
+    paidMediaSummary: "Resumo de mídia paga",
+    spend: "Investimento",
+    impressions: "Impressões",
+    reach: "Alcance",
+    clicks: "Cliques",
+    ctr: "CTR",
+    cpc: "CPC",
+    cpm: "CPM",
+    purchases: "Compras",
+    roas: "ROAS",
+    reportFocus: "Foco do relatório",
     noStrengths: "Não foram detetados pontos fortes relevantes nesta execução.",
     healthyBaseline: "Base saudável.",
   },
@@ -139,6 +172,7 @@ const sectionScoreLabels = {
     website_performance: "Website Performance",
     technical_seo: "Technical SEO",
     traffic_quality: "Traffic Quality",
+    paid_media_performance: "Paid Media",
   },
   "pt-BR": {
     channel_performance: "Performance de canal",
@@ -155,6 +189,7 @@ const sectionScoreLabels = {
     website_performance: "Performance do site",
     technical_seo: "SEO técnico",
     traffic_quality: "Qualidade do tráfego",
+    paid_media_performance: "Mídia paga",
   },
   "pt-PT": {
     channel_performance: "Performance de canal",
@@ -171,6 +206,7 @@ const sectionScoreLabels = {
     website_performance: "Performance do site",
     technical_seo: "SEO técnico",
     traffic_quality: "Qualidade do tráfego",
+    paid_media_performance: "Mídia paga",
   },
 } as const;
 
@@ -196,6 +232,7 @@ const findingSectionLabels = {
     traffic_quality: "Traffic Quality",
     landing_pages: "Landing Pages",
     location_consistency: "Location Consistency",
+    paid_media: "Paid Media",
   },
   "pt-BR": {
     campaign_performance: "Performance de campanhas",
@@ -218,6 +255,7 @@ const findingSectionLabels = {
     traffic_quality: "Qualidade do tráfego",
     landing_pages: "Landing pages",
     location_consistency: "Consistência entre unidades",
+    paid_media: "Mídia paga",
   },
   "pt-PT": {
     campaign_performance: "Performance de campanhas",
@@ -240,6 +278,7 @@ const findingSectionLabels = {
     traffic_quality: "Qualidade do tráfego",
     landing_pages: "Landing pages",
     location_consistency: "Consistência entre localizações",
+    paid_media: "Mídia paga",
   },
 } as const;
 
@@ -368,6 +407,14 @@ function ptBrMessage(finding: AuditFinding) {
       return ["A aquisição está excessivamente dependente de um único canal.", "Amplie a cobertura de aquisição e reduza a concentração de tráfego.", [`${text("channel")}: ${pct("channelShare", 0)} de participação`]] as const;
     case "traffic.landing-page":
       return ["Uma landing page com alto tráfego apresenta engajamento fraco.", "Melhore clareza above the fold, velocidade e aderência de intenção nessa página.", [`${text("path")}: ${pct("engagementRate", 0)} de engajamento`]] as const;
+    case "paid.no-purchases":
+      return ["Há investimento em mídia paga sem compras atribuídas no período.", "Revise tracking, objetivo de campanha e aderência da oferta antes de escalar o orçamento.", [`Investimento: ${num("spend")}`, `Compras: ${num("purchases")}`]] as const;
+    case "paid.ctr":
+      return ["O CTR das campanhas pagas está abaixo do esperado para o volume atual de impressões.", "Teste novos criativos, ângulos de copy e segmentos para elevar a taxa de clique.", [`CTR: ${pct("ctr", 2)}`, `Impressões: ${num("impressions")}`]] as const;
+    case "paid.roas":
+      return ["O ROAS está abaixo da faixa desejada para o volume investido.", "Realoque verba para campanhas eficientes e revise landing pages, oferta e evento de conversão.", [`ROAS: ${text("roas")}`, `Investimento: ${num("spend")}`]] as const;
+    case "paid.concentration":
+      return ["A conta está dependente demais de uma única campanha paga.", "Diversifique os conjuntos ativos para reduzir risco de fadiga e volatilidade de performance.", [`${text("campaign")}: ${pct("spendShare", 0)} do investimento`]] as const;
     case "locations.consistency":
       return ["Há variações relevantes de performance entre as unidades.", "Use a unidade com melhor desempenho como padrão operacional para as demais.", text("locationSummary").split(" || ").filter(Boolean)] as const;
     default:
@@ -440,6 +487,14 @@ function ptPtMessage(finding: AuditFinding) {
       return ["A aquisição está excessivamente dependente de um único canal.", "Alargue a cobertura de aquisição e reduza a concentração de tráfego.", [`${text("channel")}: ${pct("channelShare", 0)} de peso`]] as const;
     case "traffic.landing-page":
       return ["Uma landing page com muito tráfego apresenta um engagement fraco.", "Melhore a clareza above the fold, a velocidade e o alinhamento de intenção nessa página.", [`${text("path")}: ${pct("engagementRate", 0)} de engagement`]] as const;
+    case "paid.no-purchases":
+      return ["Existe investimento em mídia paga sem compras atribuídas no período.", "Reveja o tracking, o objetivo da campanha e o alinhamento da oferta antes de escalar orçamento.", [`Investimento: ${num("spend")}`, `Compras: ${num("purchases")}`]] as const;
+    case "paid.ctr":
+      return ["O CTR das campanhas pagas está abaixo do esperado para o volume atual de impressões.", "Teste novos criativos, ângulos de copy e segmentos para elevar a taxa de clique.", [`CTR: ${pct("ctr", 2)}`, `Impressões: ${num("impressions")}`]] as const;
+    case "paid.roas":
+      return ["O ROAS está abaixo da faixa desejada para o volume investido.", "Realoque orçamento para campanhas eficientes e reveja landing pages, oferta e evento de conversão.", [`ROAS: ${text("roas")}`, `Investimento: ${num("spend")}`]] as const;
+    case "paid.concentration":
+      return ["A conta está excessivamente dependente de uma única campanha paga.", "Diversifique os conjuntos ativos para reduzir o risco de fadiga e volatilidade de performance.", [`${text("campaign")}: ${pct("spendShare", 0)} do investimento`]] as const;
     case "locations.consistency":
       return ["Existem variações relevantes de performance entre localizações.", "Use a localização com melhor desempenho como padrão operacional para as restantes.", text("locationSummary").split(" || ").filter(Boolean)] as const;
     default:
@@ -512,6 +567,14 @@ function enMessage(finding: AuditFinding) {
       return ["The acquisition mix is overly dependent on one channel.", "Broaden acquisition coverage and de-risk traffic concentration.", [`${text("channel")}: ${pct("channelShare", 0)} share`]] as const;
     case "traffic.landing-page":
       return ["A high-traffic landing page has weak engagement.", "Improve above-the-fold clarity, load performance, and intent match on that page.", [`${text("path")}: ${pct("engagementRate", 0)} engagement`]] as const;
+    case "paid.no-purchases":
+      return ["Paid media spend is generating no attributed purchases in the selected period.", "Review tracking, campaign objective, and offer-to-audience fit before scaling budget.", [`Spend: ${num("spend")}`, `Purchases: ${num("purchases")}`]] as const;
+    case "paid.ctr":
+      return ["Paid campaign click-through rate is weak for the current impression volume.", "Test stronger creative angles, hooks, and audiences to improve click intent.", [`CTR: ${pct("ctr", 2)}`, `Impressions: ${num("impressions")}`]] as const;
+    case "paid.roas":
+      return ["ROAS is below the target band for the current spend level.", "Shift budget toward efficient campaigns and review landing pages, offer framing, and conversion tracking.", [`ROAS: ${text("roas")}`, `Spend: ${num("spend")}`]] as const;
+    case "paid.concentration":
+      return ["The ad account is over-dependent on a single paid campaign.", "Diversify active campaigns to reduce fatigue risk and performance volatility.", [`${text("campaign")}: ${pct("spendShare", 0)} of spend`]] as const;
     case "locations.consistency":
       return ["Performance varies meaningfully across locations.", "Use the strongest location as the operating standard for weaker profiles.", text("locationSummary").split(" || ").filter(Boolean)] as const;
     default:

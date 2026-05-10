@@ -16,6 +16,7 @@ const client: ClientRecord = {
   operatingModel: "single_source",
   primaryDomain: "https://fxrracing.example",
   reportLanguage: "pt-BR",
+  reportFocus: "full_funnel",
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };

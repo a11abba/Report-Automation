@@ -6,6 +6,7 @@ create table if not exists clients (
   operating_model text not null,
   primary_domain text null,
   report_language text not null default 'pt-BR',
+  report_focus text not null default 'full_funnel',
   created_at timestamptz not null,
   updated_at timestamptz not null
 );

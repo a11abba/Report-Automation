@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { deleteClientRecord, updateClientRecord } from "@/lib/audit-engine";
-import { reportLanguages } from "@/lib/audit/types";
+import { reportFocuses, reportLanguages } from "@/lib/audit/types";
 import { getAuthSession } from "@/lib/auth-session-server";
 import { assertSafeAuditUrl } from "@/lib/audit-url";
 
@@ -12,6 +12,7 @@ const updateClientSchema = z.object({
   operatingModel: z.enum(["single_source", "composed_source"]).optional(),
   primaryDomain: z.string().url().nullable().optional(),
   reportLanguage: z.enum(reportLanguages).optional(),
+  reportFocus: z.enum(reportFocuses).optional(),
 });
 
 export async function PATCH(

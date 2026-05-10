@@ -26,6 +26,7 @@ function hydrateReport(report: AuditReportPayload): AuditReportPayload {
   return {
     ...report,
     locale: report.locale ?? "pt-BR",
+    reportFocus: report.reportFocus ?? "full_funnel",
     clientIndustryLabel: report.clientIndustryLabel ?? report.snapshot.accountProfile.industry,
     execution: report.execution ?? {
       includedIntegrations: [],
@@ -47,7 +48,7 @@ export interface AppStore {
   createClient(
     input: Pick<
       ClientRecord,
-      "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage"
+      "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus"
     >,
   ): Promise<ClientRecord>;
   updateClient(
@@ -55,7 +56,7 @@ export interface AppStore {
     patch: Partial<
       Pick<
         ClientRecord,
-        "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage"
+        "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus"
       >
     >,
   ): Promise<ClientRecord | null>;
@@ -161,6 +162,7 @@ class SQLiteStore implements AppStore {
         operating_model text not null,
         primary_domain text,
         report_language text not null,
+        report_focus text not null default 'full_funnel',
         created_at text not null,
         updated_at text not null
       );
@@ -236,6 +238,14 @@ class SQLiteStore implements AppStore {
         completed_at text
       );
     `);
+    if (!this.hasColumn("clients", "report_focus")) {
+      this.db.exec("alter table clients add column report_focus text not null default 'full_funnel';");
+    }
+  }
+
+  private hasColumn(tableName: string, columnName: string) {
+    const rows = this.db.prepare(`pragma table_info(${tableName})`).all<Record<string, unknown>>();
+    return rows.some((row) => String(row.name) === columnName);
   }
 
   private async ensureMigrated() {
@@ -255,8 +265,8 @@ class SQLiteStore implements AppStore {
     }
 
     const insertClient = this.db.prepare(`
-      insert or ignore into clients (id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      insert or ignore into clients (id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertIntegration = this.db.prepare(`
       insert or ignore into integrations (id, client_id, platform_key, platform_type, display_name, credentials, settings, created_at, updated_at)
@@ -283,6 +293,7 @@ class SQLiteStore implements AppStore {
         client.operatingModel,
         client.primaryDomain,
         client.reportLanguage ?? "pt-BR",
+        client.reportFocus ?? "full_funnel",
         client.createdAt,
         client.updatedAt,
       );
@@ -345,6 +356,7 @@ class SQLiteStore implements AppStore {
       operatingModel: row.operating_model as ClientRecord["operatingModel"],
       primaryDomain: (row.primary_domain as string | null) ?? null,
       reportLanguage: (row.report_language as ClientRecord["reportLanguage"]) ?? "pt-BR",
+      reportFocus: (row.report_focus as ClientRecord["reportFocus"]) ?? "full_funnel",
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -449,7 +461,7 @@ class SQLiteStore implements AppStore {
     return row ? this.mapClient(row) : null;
   }
 
-  async createClient(input: Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage">) {
+  async createClient(input: Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus">) {
     await this.ensureMigrated();
     const now = new Date().toISOString();
     const client: ClientRecord = {
@@ -459,8 +471,8 @@ class SQLiteStore implements AppStore {
       updatedAt: now,
     };
     this.db.prepare(`
-      insert into clients (id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      insert into clients (id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       client.id,
       client.name,
@@ -469,6 +481,7 @@ class SQLiteStore implements AppStore {
       client.operatingModel,
       client.primaryDomain,
       client.reportLanguage,
+      client.reportFocus,
       client.createdAt,
       client.updatedAt,
     );
@@ -477,7 +490,7 @@ class SQLiteStore implements AppStore {
 
   async updateClient(
     id: string,
-    patch: Partial<Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage">>,
+    patch: Partial<Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus">>,
   ) {
     const current = await this.getClient(id);
     if (!current) return null;
@@ -488,7 +501,7 @@ class SQLiteStore implements AppStore {
     };
     this.db.prepare(`
       update clients
-      set name = ?, industry = ?, industry_label_pt = ?, operating_model = ?, primary_domain = ?, report_language = ?, updated_at = ?
+      set name = ?, industry = ?, industry_label_pt = ?, operating_model = ?, primary_domain = ?, report_language = ?, report_focus = ?, updated_at = ?
       where id = ?
     `).run(
       next.name,
@@ -497,6 +510,7 @@ class SQLiteStore implements AppStore {
       next.operatingModel,
       next.primaryDomain,
       next.reportLanguage,
+      next.reportFocus,
       next.updatedAt,
       id,
     );

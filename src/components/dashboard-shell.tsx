@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { deleteJson, getJson, patchJson, postJson } from "@/lib/api-client";
 import type { AuthSession } from "@/lib/auth-session";
+import { getReportFocusLabel } from "@/lib/report-focus";
 import type {
   AuditRecord,
   ConnectorHealthCheckResult,
@@ -31,6 +32,7 @@ interface DashboardData {
     operatingModel: "single_source" | "composed_source";
     primaryDomain: string | null;
     reportLanguage: "pt-BR" | "pt-PT" | "en";
+    reportFocus: "full_funnel" | "lifecycle_marketing" | "seo_local" | "paid_media";
     integrations: Array<{
       id: string;
       platformKey: string;
@@ -44,11 +46,12 @@ interface DashboardData {
       credentials: { authOrigin?: string };
       settings: {
         demoMode?: boolean;
-        targetUrl?: string;
-        ga4PropertyId?: string;
-        propertyId?: string;
-        businessAccountId?: string;
-        businessProfileId?: string;
+        targetUrl?: string | null;
+        ga4PropertyId?: string | null;
+        adAccountId?: string | null;
+        propertyId?: string | null;
+        businessAccountId?: string | null;
+        businessProfileId?: string | null;
       };
     }>;
     locations: LocationRecord[];
@@ -221,6 +224,7 @@ export function DashboardShell({
               const primaryDomain = String(formData.get("primaryDomain") ?? "");
               const operatingModel = String(formData.get("operatingModel") ?? "single_source");
               const reportLanguage = String(formData.get("reportLanguage") ?? "pt-BR");
+              const reportFocus = String(formData.get("reportFocus") ?? "full_funnel");
               runTask(
                 () =>
                   postJson("/api/clients", {
@@ -230,6 +234,7 @@ export function DashboardShell({
                     operatingModel,
                     primaryDomain: primaryDomain || null,
                     reportLanguage,
+                    reportFocus,
                   }),
                 `Client "${name}" created.`,
               );
@@ -259,6 +264,16 @@ export function DashboardShell({
             >
               <option value="single_source">Single source</option>
               <option value="composed_source">Composed source</option>
+            </select>
+            <select
+              name="reportFocus"
+              className="rounded-2xl border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm outline-none"
+              defaultValue="full_funnel"
+            >
+              <option value="full_funnel">Full funnel report</option>
+              <option value="lifecycle_marketing">Lifecycle / Email report</option>
+              <option value="seo_local">SEO / Local report</option>
+              <option value="paid_media">Paid media report</option>
             </select>
             <button
               type="submit"
@@ -310,6 +325,9 @@ export function DashboardShell({
                         <p className="mt-1 text-sm text-[color:var(--muted)]">
                           Report language: {client.reportLanguage}
                           {client.industryLabelPt ? ` \u00b7 PT label: ${client.industryLabelPt}` : ""}
+                        </p>
+                        <p className="mt-1 text-sm text-[color:var(--muted)]">
+                          Report focus: {getReportFocusLabel("en", client.reportFocus)}
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -394,7 +412,7 @@ export function DashboardShell({
                     ) : null}
 
                     <form
-                      className="mt-4 grid gap-3 lg:grid-cols-[1fr_1fr_auto]"
+                      className="mt-4 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]"
                       onSubmit={(event) => {
                         event.preventDefault();
                         const formData = new FormData(event.currentTarget);
@@ -404,6 +422,7 @@ export function DashboardShell({
                               reportLanguage: String(
                                 formData.get("reportLanguage") ?? client.reportLanguage,
                               ),
+                              reportFocus: String(formData.get("reportFocus") ?? client.reportFocus),
                               industryLabelPt: String(formData.get("industryLabelPt") ?? "") || null,
                             }),
                           `Client preferences updated for ${client.name}.`,
@@ -419,6 +438,16 @@ export function DashboardShell({
                         <option value="pt-PT">Report in pt-PT</option>
                         <option value="en">Report in English</option>
                       </select>
+                      <select
+                        name="reportFocus"
+                        className="rounded-2xl border border-[color:var(--line)] bg-white px-4 py-3 text-sm outline-none"
+                        defaultValue={client.reportFocus}
+                      >
+                        <option value="full_funnel">Full funnel report</option>
+                        <option value="lifecycle_marketing">Lifecycle / Email report</option>
+                        <option value="seo_local">SEO / Local report</option>
+                        <option value="paid_media">Paid media report</option>
+                      </select>
                       <Input
                         name="industryLabelPt"
                         placeholder="Portuguese report label (used only for PT reports)"
@@ -432,7 +461,7 @@ export function DashboardShell({
                       </button>
                     </form>
 
-                    <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_1fr_auto]">
+                    <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto]">
                       <select
                         form={`integration-${client.id}`}
                         name="platformKey"
@@ -461,6 +490,11 @@ export function DashboardShell({
                         name="targetUrl"
                         placeholder="Target URL / property hint"
                       />
+                      <Input
+                        form={`integration-${client.id}`}
+                        name="adAccountId"
+                        placeholder="Meta ad account ID"
+                      />
                       <button
                         form={`integration-${client.id}`}
                         type="submit"
@@ -479,6 +513,7 @@ export function DashboardShell({
                         const displayName = String(formData.get("displayName") ?? platformKey);
                         const apiKey = String(formData.get("apiKey") ?? "");
                         const targetUrl = String(formData.get("targetUrl") ?? "");
+                        const adAccountId = String(formData.get("adAccountId") ?? "");
                         runTask(
                           () =>
                             postJson(`/api/clients/${client.id}/integrations`, {
@@ -488,6 +523,7 @@ export function DashboardShell({
                               demoMode: resolveDemoMode(platformKey, apiKey),
                               authOrigin: apiKey.length === 0 ? "none" : "api_key",
                               targetUrl: targetUrl || client.primaryDomain || null,
+                              adAccountId: adAccountId || null,
                             }),
                           `Integration added to ${client.name}.`,
                         );
@@ -596,6 +632,40 @@ export function DashboardShell({
                                   className="rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm"
                                 >
                                   Save GA4 property
+                                </button>
+                              </form>
+                            ) : null}
+
+                            {integration.platformKey === "meta_ads" ? (
+                              <form
+                                className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  const formData = new FormData(event.currentTarget);
+                                  const adAccountId = String(formData.get("adAccountId") ?? "").trim();
+                                  runTask(
+                                    () =>
+                                      patchJson(
+                                        `/api/clients/${client.id}/integrations/${integration.id}`,
+                                        {
+                                          adAccountId: adAccountId || null,
+                                          demoMode: false,
+                                        },
+                                      ),
+                                    `Meta ad account updated for ${client.name}.`,
+                                  );
+                                }}
+                              >
+                                <Input
+                                  name="adAccountId"
+                                  placeholder="Meta ad account ID (1234567890 or act_1234567890)"
+                                  defaultValue={integration.settings.adAccountId ?? ""}
+                                />
+                                <button
+                                  type="submit"
+                                  className="rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm"
+                                >
+                                  Save ad account
                                 </button>
                               </form>
                             ) : null}

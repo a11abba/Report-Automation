@@ -15,6 +15,7 @@ const integrationSchema = z.object({
     "google_analytics",
     "pagespeed_insights",
     "website_crawler",
+    "meta_ads",
   ]),
   displayName: z.string().min(2),
   apiKey: z.string().optional().default(""),
@@ -28,6 +29,7 @@ const integrationSchema = z.object({
   ga4PropertyId: z.string().nullable().optional(),
   businessAccountId: z.string().nullable().optional(),
   businessProfileId: z.string().nullable().optional(),
+  adAccountId: z.string().nullable().optional(),
   serviceAccountEmail: z.string().nullable().optional(),
 });
 
@@ -71,6 +73,7 @@ export async function POST(
         ga4PropertyId: body.ga4PropertyId ?? undefined,
         businessAccountId: body.businessAccountId ?? undefined,
         businessProfileId: body.businessProfileId ?? undefined,
+        adAccountId: body.adAccountId ?? undefined,
       },
     });
 

@@ -11,6 +11,7 @@ const client: ClientRecord = {
   operatingModel: "composed_source",
   primaryDomain: "https://northwind.example",
   reportLanguage: "pt-BR",
+  reportFocus: "full_funnel",
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
@@ -85,7 +86,7 @@ describe("multi-platform audit domain", () => {
 
     const merged = mergeSnapshots(client, [searchSnapshot, websiteSnapshot]);
     const findings = evaluateRules(merged);
-    const scoring = scoreAudit(merged, findings);
+    const scoring = scoreAudit(merged, findings, client.reportFocus);
     const report = buildReport("audit_demo", client, merged, findings, {
       includedIntegrations: [
         { id: "int_4", label: "google_search_console", platformKey: "google_search_console" },
