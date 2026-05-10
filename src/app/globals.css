@@ -49,6 +49,14 @@ select {
   font: inherit;
 }
 
+summary {
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
 ::selection {
   background: rgba(221, 107, 32, 0.16);
 }

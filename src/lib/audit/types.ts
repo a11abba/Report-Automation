@@ -21,6 +21,8 @@ export const platformKeys = [
   "google_search_console",
   "google_business_profile",
   "google_analytics",
+  "microsoft_ads",
+  "microsoft_merchant_center",
   "pagespeed_insights",
   "website_crawler",
   "meta_ads",
@@ -590,6 +592,10 @@ export interface IntegrationSettings {
   businessProfileId?: string | null;
   ga4PropertyId?: string | null;
   adAccountId?: string | null;
+  microsoftCustomerId?: string | null;
+  microsoftAccountId?: string | null;
+  merchantStoreId?: string | null;
+  merchantFeedId?: string | null;
   locationIds?: string[];
   extensionContext?: {
     detectedUrl?: string;

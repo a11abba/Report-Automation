@@ -24,6 +24,10 @@ import {
 } from "./legacy-connectors";
 import { MetaAdsConnector } from "./meta-connectors";
 import {
+  MicrosoftAdsConnector,
+  MicrosoftMerchantCenterConnector,
+} from "./microsoft-connectors";
+import {
   PageSpeedConnector,
   WebsiteCrawlerConnector,
 } from "./website-connectors";
@@ -138,6 +142,8 @@ const connectors: Record<PlatformKey, PlatformConnector> = {
   google_search_console: new GoogleSearchConsoleConnector(),
   google_business_profile: new GoogleBusinessProfileConnector(),
   google_analytics: new GoogleAnalyticsConnector(),
+  microsoft_ads: new MicrosoftAdsConnector(),
+  microsoft_merchant_center: new MicrosoftMerchantCenterConnector(),
   pagespeed_insights: new PageSpeedConnector(),
   website_crawler: new WebsiteCrawlerConnector(),
   meta_ads: new MetaAdsConnector(),
@@ -197,6 +203,24 @@ export const platformCatalog: PlatformDefinition[] = [
     capabilities: connectors.google_analytics.capabilities(),
     authModes: ["oauth", "service_account", "none"],
     description: "Traffic quality, channel mix, landing pages, and conversion performance.",
+  },
+  {
+    key: "microsoft_ads",
+    type: "paid_media",
+    name: "Microsoft Ads",
+    launchStage: "live",
+    capabilities: connectors.microsoft_ads.capabilities(),
+    authModes: ["oauth", "none"],
+    description: "Paid media account connection for Microsoft Advertising customer and account level diagnostics.",
+  },
+  {
+    key: "microsoft_merchant_center",
+    type: "commerce_pos",
+    name: "Microsoft Merchant Center",
+    launchStage: "live",
+    capabilities: connectors.microsoft_merchant_center.capabilities(),
+    authModes: ["oauth", "none"],
+    description: "Merchant Center catalog connection for Microsoft store, feed, and product health diagnostics.",
   },
   {
     key: "meta_ads",

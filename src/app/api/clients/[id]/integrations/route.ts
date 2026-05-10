@@ -13,6 +13,8 @@ const integrationSchema = z.object({
     "google_search_console",
     "google_business_profile",
     "google_analytics",
+    "microsoft_ads",
+    "microsoft_merchant_center",
     "pagespeed_insights",
     "website_crawler",
     "meta_ads",
@@ -30,6 +32,10 @@ const integrationSchema = z.object({
   businessAccountId: z.string().nullable().optional(),
   businessProfileId: z.string().nullable().optional(),
   adAccountId: z.string().nullable().optional(),
+  microsoftCustomerId: z.string().nullable().optional(),
+  microsoftAccountId: z.string().nullable().optional(),
+  merchantStoreId: z.string().nullable().optional(),
+  merchantFeedId: z.string().nullable().optional(),
   serviceAccountEmail: z.string().nullable().optional(),
 });
 
@@ -74,6 +80,10 @@ export async function POST(
         businessAccountId: body.businessAccountId ?? undefined,
         businessProfileId: body.businessProfileId ?? undefined,
         adAccountId: body.adAccountId ?? undefined,
+        microsoftCustomerId: body.microsoftCustomerId ?? undefined,
+        microsoftAccountId: body.microsoftAccountId ?? undefined,
+        merchantStoreId: body.merchantStoreId ?? undefined,
+        merchantFeedId: body.merchantFeedId ?? undefined,
       },
     });
 

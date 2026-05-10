@@ -14,6 +14,10 @@ const updateIntegrationSchema = z.object({
   businessAccountId: z.string().nullable().optional(),
   businessProfileId: z.string().nullable().optional(),
   adAccountId: z.string().nullable().optional(),
+  microsoftCustomerId: z.string().nullable().optional(),
+  microsoftAccountId: z.string().nullable().optional(),
+  merchantStoreId: z.string().nullable().optional(),
+  merchantFeedId: z.string().nullable().optional(),
   serviceAccountEmail: z.string().nullable().optional(),
 });
 
@@ -48,6 +52,10 @@ export async function PATCH(
     if (body.businessAccountId !== undefined) settingsPatch.businessAccountId = body.businessAccountId;
     if (body.businessProfileId !== undefined) settingsPatch.businessProfileId = body.businessProfileId;
     if (body.adAccountId !== undefined) settingsPatch.adAccountId = body.adAccountId;
+    if (body.microsoftCustomerId !== undefined) settingsPatch.microsoftCustomerId = body.microsoftCustomerId;
+    if (body.microsoftAccountId !== undefined) settingsPatch.microsoftAccountId = body.microsoftAccountId;
+    if (body.merchantStoreId !== undefined) settingsPatch.merchantStoreId = body.merchantStoreId;
+    if (body.merchantFeedId !== undefined) settingsPatch.merchantFeedId = body.merchantFeedId;
 
     const integration = await updateIntegrationRecord(integrationId, {
       displayName: body.displayName,

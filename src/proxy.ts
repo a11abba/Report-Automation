@@ -11,7 +11,8 @@ function isPublicPath(pathname: string) {
     pathname === "/login" ||
     pathname.startsWith("/api/auth/google/start") ||
     pathname.startsWith("/api/auth/logout") ||
-    pathname.startsWith("/api/integrations/google/oauth/callback")
+    pathname.startsWith("/api/integrations/google/oauth/callback") ||
+    pathname.startsWith("/api/integrations/microsoft/oauth/callback")
   );
 }
 

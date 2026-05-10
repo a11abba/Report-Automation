@@ -16,6 +16,12 @@ import {
   getGoogleScopes,
   refreshGoogleAccessToken,
 } from "@/lib/google-auth";
+import {
+  buildMicrosoftOAuthUrl,
+  consumeMicrosoftOAuthCallback,
+  getMicrosoftScopes,
+  refreshMicrosoftAccessToken,
+} from "@/lib/microsoft-auth";
 import { buildReport, evaluateRules, rulePackCatalog } from "@/lib/rules";
 import { getPdfRendererStatus } from "@/lib/reports";
 import { getStore } from "@/lib/storage";
@@ -117,6 +123,10 @@ async function getIntegrationExecutionState(client: ClientRecord, integration: I
           integration.settings.businessAccountId ||
           integration.settings.businessProfileId ||
           integration.settings.adAccountId ||
+          integration.settings.microsoftCustomerId ||
+          integration.settings.microsoftAccountId ||
+          integration.settings.merchantStoreId ||
+          integration.settings.merchantFeedId ||
           integration.settings.targetUrl,
       ),
       liveReady: false,
@@ -143,9 +153,17 @@ function isGoogleOAuthIntegration(integration: IntegrationRecord) {
   );
 }
 
+function isMicrosoftOAuthIntegration(integration: IntegrationRecord) {
+  return (
+    integration.credentials.authOrigin === "oauth" &&
+    (integration.platformKey === "microsoft_ads" ||
+      integration.platformKey === "microsoft_merchant_center")
+  );
+}
+
 async function prepareIntegrationForExecution(integration: IntegrationRecord) {
   const hydrated = await hydrateIntegrationForExecution(integration);
-  if (!isGoogleOAuthIntegration(hydrated)) {
+  if (!isGoogleOAuthIntegration(hydrated) && !isMicrosoftOAuthIntegration(hydrated)) {
     return hydrated;
   }
 
@@ -159,10 +177,15 @@ async function prepareIntegrationForExecution(integration: IntegrationRecord) {
     return hydrated;
   }
 
-  const refreshed = await refreshGoogleAccessToken(
-    hydrated.credentials.refreshToken,
-    hydrated.credentials.scopes,
-  );
+  const refreshed = isGoogleOAuthIntegration(hydrated)
+    ? await refreshGoogleAccessToken(
+        hydrated.credentials.refreshToken,
+        hydrated.credentials.scopes,
+      )
+    : await refreshMicrosoftAccessToken(
+        hydrated.credentials.refreshToken,
+        hydrated.credentials.scopes,
+      );
   const updated = await updateIntegrationWithVault(hydrated.id, {
     credentials: {
       ...hydrated.credentials,
@@ -569,6 +592,56 @@ export async function beginGoogleOAuth(clientId: string, platformKey: PlatformKe
   return buildGoogleOAuthUrl(clientId, platformKey);
 }
 
+export async function beginMicrosoftOAuth(clientId: string, platformKey: PlatformKey) {
+  return buildMicrosoftOAuthUrl(clientId, platformKey);
+}
+
+async function upsertOAuthIntegration(
+  clientId: string,
+  platformKey: PlatformKey,
+  credentials: IntegrationRecord["credentials"],
+) {
+  const store = await getStore();
+  const existing = (await store.listIntegrationsByClient(clientId)).find(
+    (integration) => integration.platformKey === platformKey,
+  );
+
+  if (existing) {
+    const updated = await updateIntegrationRecord(existing.id, {
+      credentials: {
+        ...existing.credentials,
+        ...credentials,
+        authOrigin: "oauth",
+      },
+      settings: {
+        ...existing.settings,
+        demoMode: false,
+      },
+    });
+
+    if (!updated) {
+      throw new Error(`Unable to update OAuth integration for ${platformKey}.`);
+    }
+
+    return updated;
+  }
+
+  return createIntegrationRecord(clientId, {
+    platformKey,
+    platformType: getConnector(platformKey).platformType(),
+    displayName:
+      platformCatalog.find((platform) => platform.key === platformKey)?.name ??
+      platformKey,
+    credentials: {
+      ...credentials,
+      authOrigin: "oauth",
+    },
+    settings: {
+      demoMode: false,
+    },
+  });
+}
+
 export async function finishGoogleOAuth(url: URL) {
   const callback = await consumeGoogleOAuthCallback(url);
   const scopes = getGoogleScopes(callback.platformKey);
@@ -588,20 +661,49 @@ export async function finishGoogleOAuth(url: URL) {
     };
   }
 
-  const integration = await createIntegrationRecord(callback.clientId, {
+  const integration = await upsertOAuthIntegration(callback.clientId, callback.platformKey, {
+    ...callback.credentials,
+    scopes,
+    authOrigin: "oauth",
+  });
+
+  await logEvent({
+    code: "oauth.connected",
+    message: `OAuth connected for ${callback.platformKey}.`,
+    detail: { clientId: callback.clientId, integrationId: integration.id },
+  });
+
+  return {
+    status: "connected",
+    clientId: callback.clientId,
     platformKey: callback.platformKey,
-    platformType: getConnector(callback.platformKey).platformType(),
-    displayName:
-      platformCatalog.find((platform) => platform.key === callback.platformKey)?.name ??
-      callback.platformKey,
-    credentials: {
-      ...callback.credentials,
-      authOrigin: "oauth",
+    integration,
+  };
+}
+
+export async function finishMicrosoftOAuth(url: URL) {
+  const callback = await consumeMicrosoftOAuthCallback(url);
+  const scopes = getMicrosoftScopes(callback.platformKey);
+
+  if (!callback.credentials) {
+    await logEvent({
+      code: "oauth.config_required",
+      message: "Authorization code missing or Microsoft OAuth was not fully configured.",
+      detail: { clientId: callback.clientId, platformKey: callback.platformKey },
+    });
+    return {
+      status: "config_required",
+      clientId: callback.clientId,
+      platformKey: callback.platformKey,
       scopes,
-    },
-    settings: {
-      demoMode: false,
-    },
+      message: "Authorization code missing or Microsoft OAuth was not fully configured.",
+    };
+  }
+
+  const integration = await upsertOAuthIntegration(callback.clientId, callback.platformKey, {
+    ...callback.credentials,
+    scopes,
+    authOrigin: "oauth",
   });
 
   await logEvent({

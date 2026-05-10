@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useState, useTransition, type InputHTMLAttributes } from "react";
+import {
+  useEffect,
+  useState,
+  useTransition,
+  type InputHTMLAttributes,
+  type ReactNode,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { deleteJson, getJson, patchJson, postJson } from "@/lib/api-client";
@@ -52,6 +58,10 @@ interface DashboardData {
         propertyId?: string | null;
         businessAccountId?: string | null;
         businessProfileId?: string | null;
+        microsoftCustomerId?: string | null;
+        microsoftAccountId?: string | null;
+        merchantStoreId?: string | null;
+        merchantFeedId?: string | null;
       };
     }>;
     locations: LocationRecord[];
@@ -114,6 +124,31 @@ export function DashboardShell({
     runTask(async () => {
       const payload = await postJson<{ authUrl?: string }>(
         `/api/clients/${clientId}/integrations/google/oauth/start`,
+        { platformKey },
+      );
+      if (payload.authUrl) {
+        const desktopRuntime = (window as Window & {
+          desktopRuntime?: { openExternal?: (url: string) => Promise<unknown> };
+        }).desktopRuntime;
+        if (desktopRuntime?.openExternal) {
+          await desktopRuntime.openExternal(payload.authUrl);
+          return;
+        }
+
+        const opened = window.open(payload.authUrl, "_blank", "width=920,height=780");
+        if (!opened) {
+          throw new Error("The OAuth window was blocked. Please allow popups and try again.");
+        }
+        return;
+      }
+      throw new Error("OAuth URL was not returned.");
+    }, "OAuth window opened.");
+  };
+
+  const launchMicrosoftOAuth = (clientId: string, platformKey: string) => {
+    runTask(async () => {
+      const payload = await postJson<{ authUrl?: string }>(
+        `/api/clients/${clientId}/integrations/microsoft/oauth/start`,
         { platformKey },
       );
       if (payload.authUrl) {
@@ -549,6 +584,18 @@ export function DashboardShell({
                       >
                         Connect GA4
                       </button>
+                      <button
+                        className="rounded-full border border-[color:var(--line)] bg-white px-3 py-2 text-xs uppercase tracking-[0.2em]"
+                        onClick={() => launchMicrosoftOAuth(client.id, "microsoft_ads")}
+                      >
+                        Connect Microsoft Ads
+                      </button>
+                      <button
+                        className="rounded-full border border-[color:var(--line)] bg-white px-3 py-2 text-xs uppercase tracking-[0.2em]"
+                        onClick={() => launchMicrosoftOAuth(client.id, "microsoft_merchant_center")}
+                      >
+                        Connect Merchant Center
+                      </button>
                     </div>
 
                     <div className="mt-5 grid gap-3">
@@ -666,6 +713,203 @@ export function DashboardShell({
                                   className="rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm"
                                 >
                                   Save ad account
+                                </button>
+                              </form>
+                            ) : null}
+
+                            {integration.platformKey === "microsoft_ads" ? (
+                              <form
+                                className="mt-4 grid gap-4"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  const formData = new FormData(event.currentTarget);
+                                  const microsoftCustomerId = String(formData.get("microsoftCustomerId") ?? "").trim();
+                                  const microsoftAccountId = String(formData.get("microsoftAccountId") ?? "").trim();
+                                  runTask(
+                                    () =>
+                                      patchJson(
+                                        `/api/clients/${client.id}/integrations/${integration.id}`,
+                                        {
+                                          microsoftCustomerId: microsoftCustomerId || null,
+                                          microsoftAccountId: microsoftAccountId || null,
+                                          demoMode: false,
+                                        },
+                                      ),
+                                    `Microsoft Ads account updated for ${client.name}.`,
+                                  );
+                                }}
+                              >
+                                <div className="grid gap-3 lg:grid-cols-2">
+                                  <FieldWithHelp
+                                    label="Customer ID"
+                                    helpTitle="Where to find Customer ID"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Open <strong>Campaigns</strong> in Microsoft Advertising
+                                          and look at the browser URL.
+                                        </p>
+                                        <p>
+                                          Copy the numeric value after <code>cid=</code>.
+                                        </p>
+                                        <p>
+                                          Example: <code>...&cid=501071198&aid=149461593</code>
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="microsoftCustomerId"
+                                      placeholder="Microsoft Customer ID"
+                                      defaultValue={integration.settings.microsoftCustomerId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                  <FieldWithHelp
+                                    label="Account ID"
+                                    helpTitle="Where to find Account ID"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          On the same <strong>Campaigns</strong> page URL, copy the
+                                          numeric value after <code>aid=</code>.
+                                        </p>
+                                        <p>
+                                          Do not use the short account code shown in the selector.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="microsoftAccountId"
+                                      placeholder="Microsoft Account ID"
+                                      defaultValue={integration.settings.microsoftAccountId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                </div>
+                                <button
+                                  type="submit"
+                                  className="w-full rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm lg:w-auto"
+                                >
+                                  Save Microsoft Ads IDs
+                                </button>
+                              </form>
+                            ) : null}
+
+                            {integration.platformKey === "microsoft_merchant_center" ? (
+                              <form
+                                className="mt-4 grid gap-4"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  const formData = new FormData(event.currentTarget);
+                                  const microsoftCustomerId = String(formData.get("microsoftCustomerId") ?? "").trim();
+                                  const microsoftAccountId = String(formData.get("microsoftAccountId") ?? "").trim();
+                                  const merchantStoreId = String(formData.get("merchantStoreId") ?? "").trim();
+                                  const merchantFeedId = String(formData.get("merchantFeedId") ?? "").trim();
+                                  runTask(
+                                    () =>
+                                      patchJson(
+                                        `/api/clients/${client.id}/integrations/${integration.id}`,
+                                        {
+                                          microsoftCustomerId: microsoftCustomerId || null,
+                                          microsoftAccountId: microsoftAccountId || null,
+                                          merchantStoreId: merchantStoreId || null,
+                                          merchantFeedId: merchantFeedId || null,
+                                          demoMode: false,
+                                        },
+                                      ),
+                                    `Microsoft Merchant Center updated for ${client.name}.`,
+                                  );
+                                }}
+                              >
+                                <div className="grid gap-3 lg:grid-cols-2">
+                                  <FieldWithHelp
+                                    label="Customer ID"
+                                    helpTitle="Where to find Customer ID"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Open <strong>Campaigns</strong> in Microsoft Advertising
+                                          and copy the numeric value after <code>cid=</code> in the
+                                          URL.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="microsoftCustomerId"
+                                      placeholder="Microsoft Customer ID"
+                                      defaultValue={integration.settings.microsoftCustomerId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                  <FieldWithHelp
+                                    label="Account ID"
+                                    helpTitle="Where to find Account ID"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          On the same Microsoft Advertising URL, copy the numeric
+                                          value after <code>aid=</code>.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="microsoftAccountId"
+                                      placeholder="Microsoft Account ID"
+                                      defaultValue={integration.settings.microsoftAccountId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                  <FieldWithHelp
+                                    label="Merchant Store ID"
+                                    helpTitle="Where to find Merchant Store ID"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Open <strong>Merchant Center</strong> for the client and
+                                          look for the store details page or the store URL.
+                                        </p>
+                                        <p>
+                                          Use the numeric store identifier when available. If the UI
+                                          does not expose it clearly, keep this field pending and we
+                                          can resolve it in the API adapter step.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="merchantStoreId"
+                                      placeholder="Merchant Store ID"
+                                      defaultValue={integration.settings.merchantStoreId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                  <FieldWithHelp
+                                    label="Feed ID"
+                                    helpTitle="Where to find Feed ID"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Open the feed details screen in Merchant Center and copy
+                                          the numeric <strong>Feed ID</strong>.
+                                        </p>
+                                        <p>
+                                          This field is optional for the first connection, but it is
+                                          useful for diagnostics and future sync checks.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="merchantFeedId"
+                                      placeholder="Feed ID (optional)"
+                                      defaultValue={integration.settings.merchantFeedId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                </div>
+                                <button
+                                  type="submit"
+                                  className="w-full rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm lg:w-auto"
+                                >
+                                  Save Merchant Center IDs
                                 </button>
                               </form>
                             ) : null}
@@ -855,6 +1099,42 @@ function StatCard({ label, value }: { label: string; value: string }) {
       <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--mist)]">{label}</p>
       <p className="mt-3 text-3xl font-semibold tracking-[-0.04em]">{value}</p>
     </div>
+  );
+}
+
+function FieldWithHelp({
+  label,
+  helpTitle,
+  helpBody,
+  children,
+}: {
+  label: string;
+  helpTitle: string;
+  helpBody: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <label className="grid gap-2">
+      <span className="flex items-center gap-2 text-sm font-medium text-[color:var(--ink)]">
+        {label}
+        <HelpPopover title={helpTitle}>{helpBody}</HelpPopover>
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function HelpPopover({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <details className="group relative inline-block">
+      <summary className="flex h-5 w-5 cursor-pointer list-none items-center justify-center rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] text-[11px] font-semibold text-[color:var(--signal)] transition hover:border-[color:var(--signal)]">
+        ?
+      </summary>
+      <div className="absolute left-0 top-full z-20 mt-3 w-[min(22rem,calc(100vw-4rem))] rounded-[1.25rem] border border-[color:var(--line)] bg-white p-4 text-sm font-normal leading-6 text-[color:var(--muted)] shadow-[0_20px_45px_rgba(20,33,61,0.14)]">
+        <p className="font-semibold text-[color:var(--ink)]">{title}</p>
+        <div className="mt-2 space-y-2">{children}</div>
+      </div>
+    </details>
   );
 }
 
