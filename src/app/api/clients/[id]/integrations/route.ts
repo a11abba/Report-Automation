@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createIntegrationRecord } from "@/lib/audit-engine";
-import { getAuthSession } from "@/lib/auth-session-server";
 import { assertSafeAuditUrl } from "@/lib/audit-url";
 import { platformCatalog } from "@/lib/connectors";
+import { loadClientForViewer, requireRouteViewer } from "@/lib/route-auth";
 
 const integrationSchema = z.object({
   platformKey: z.enum([
@@ -43,11 +43,12 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  if (!(await getAuthSession())) {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
-  }
+  const { viewer, response } = await requireRouteViewer();
+  if (!viewer) return response;
   try {
     const { id } = await context.params;
+    const { response: clientResponse } = await loadClientForViewer(viewer, id);
+    if (clientResponse) return clientResponse;
     const body = integrationSchema.parse(await request.json());
     const platform = platformCatalog.find((item) => item.key === body.platformKey);
     if (!platform) {

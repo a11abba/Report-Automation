@@ -1,52 +1,29 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import crypto from "node:crypto";
 import type {
   CredentialSecretPayload,
   IntegrationCredentials,
 } from "@/lib/audit/types";
-import { getAuditDataDir, getAuditDataFile } from "@/lib/runtime-paths";
+import { getAuditDataFile } from "@/lib/runtime-paths";
+import { getStore } from "@/lib/storage";
 import { getEncryptionKey } from "./app-secret";
 
 interface VaultShape {
   secrets: Record<string, string>;
 }
 
-const dataDir = getAuditDataDir();
 const vaultFile = getAuditDataFile("credential-vault.json");
 
-function emptyVault(): VaultShape {
-  return { secrets: {} };
-}
-
-async function ensureVaultFile() {
-  await mkdir(dataDir, { recursive: true });
-  try {
-    await readFile(vaultFile, "utf-8");
-  } catch {
-    await writeFile(vaultFile, JSON.stringify(emptyVault(), null, 2), {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-  }
-}
-
 async function readVault() {
-  await ensureVaultFile();
-  const raw = await readFile(vaultFile, "utf-8");
-  const parsed = JSON.parse(raw) as Partial<VaultShape>;
-  return {
-    ...emptyVault(),
-    ...parsed,
-    secrets: parsed.secrets ?? {},
-  };
-}
-
-async function writeVault(vault: VaultShape) {
-  await ensureVaultFile();
-  await writeFile(vaultFile, JSON.stringify(vault, null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  try {
+    const raw = await readFile(vaultFile, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<VaultShape>;
+    return {
+      secrets: parsed.secrets ?? {},
+    };
+  } catch {
+    return { secrets: {} };
+  }
 }
 
 function pickSecretPayload(credentials: IntegrationCredentials): CredentialSecretPayload | null {
@@ -112,10 +89,9 @@ export async function storeCredentialSecret(
   }
 
   const key = await getEncryptionKey();
-  const vault = await readVault();
   const secretRef = existingSecretRef ?? credentials.secretRef ?? randomSecretRef();
-  vault.secrets[secretRef] = encryptPayload(payload, key);
-  await writeVault(vault);
+  const store = await getStore();
+  await store.storeSecret(secretRef, encryptPayload(payload, key));
   sanitized.secretRef = secretRef;
   return sanitized;
 }
@@ -125,8 +101,15 @@ export async function hydrateCredentialSecret(credentials: IntegrationCredential
     return credentials;
   }
 
-  const vault = await readVault();
-  const encrypted = vault.secrets[credentials.secretRef];
+  const store = await getStore();
+  let encrypted = await store.readSecret(credentials.secretRef);
+  if (!encrypted) {
+    const vault = await readVault();
+    encrypted = vault.secrets[credentials.secretRef] ?? null;
+    if (encrypted) {
+      await store.storeSecret(credentials.secretRef, encrypted);
+    }
+  }
   if (!encrypted) {
     return credentials;
   }
@@ -143,10 +126,6 @@ export async function removeCredentialSecret(secretRef: string | undefined | nul
   if (!secretRef) {
     return;
   }
-
-  const vault = await readVault();
-  if (vault.secrets[secretRef]) {
-    delete vault.secrets[secretRef];
-    await writeVault(vault);
-  }
+  const store = await getStore();
+  await store.deleteSecret(secretRef);
 }

@@ -9,6 +9,7 @@ import {
   type LocationRecord,
   type PlatformKey,
 } from "@/lib/audit/types";
+import type { AuthSession } from "@/lib/auth-session";
 import { getConnector, mergeSnapshots, platformCatalog } from "@/lib/connectors";
 import {
   buildGoogleOAuthUrl,
@@ -197,11 +198,25 @@ async function prepareIntegrationForExecution(integration: IntegrationRecord) {
   return updated ? hydrateIntegrationForExecution(updated) : hydrated;
 }
 
-export async function listDashboardData() {
+export async function listDashboardData(
+  viewer: Pick<AuthSession, "role" | "accountId">,
+) {
   const store = await getStore();
-  const [clients, audits] = await Promise.all([store.listClients(), store.listAudits()]);
+  const [clients, audits, accounts] = await Promise.all([
+    store.listClients(),
+    store.listAudits(),
+    store.listAccounts(),
+  ]);
+  const visibleClients =
+    viewer.role === "platform_admin"
+      ? clients
+      : clients.filter((client) => client.accountId === viewer.accountId);
+  const visibleAudits =
+    viewer.role === "platform_admin"
+      ? audits
+      : audits.filter((audit) => audit.accountId === viewer.accountId);
   const clientsWithRelations = await Promise.all(
-    clients.map(async (client) => {
+    visibleClients.map(async (client) => {
       const integrations = await store.listIntegrationsByClient(client.id);
       const integrationStates = await Promise.all(
         integrations.map(async (integration) => {
@@ -220,15 +235,49 @@ export async function listDashboardData() {
         ...client,
         integrations: integrationStates,
         locations: await store.listLocationsByClient(client.id),
-        audits: audits.filter((audit) => audit.clientId === client.id).slice(0, 5),
+        audits: visibleAudits.filter((audit) => audit.clientId === client.id).slice(0, 5),
+      };
+    }),
+  );
+  const visibleAccounts =
+    viewer.role === "platform_admin"
+      ? accounts
+      : accounts.filter((account) => account.id === viewer.accountId);
+  const accountSummaries = await Promise.all(
+    visibleAccounts.map(async (account) => {
+      const members = await store.listAccountMemberships(account.id);
+      const accountClients = clients.filter((client) => client.accountId === account.id);
+      const accountAudits = audits.filter((audit) => audit.accountId === account.id);
+      const readyIntegrations = (
+        await Promise.all(
+          accountClients.map(async (client) => {
+            const integrations = await store.listIntegrationsByClient(client.id);
+            const states = await Promise.all(
+              integrations.map(async (integration) =>
+                getIntegrationExecutionState(client, integration),
+              ),
+            );
+            return states.filter((state) => state.connectionStatus === "ready").length;
+          }),
+        )
+      ).reduce((sum, value) => sum + value, 0);
+      return {
+        ...account,
+        members,
+        clientCount: accountClients.length,
+        lastAuditAt: accountAudits[0]?.createdAt ?? null,
+        readyIntegrations,
       };
     }),
   );
   return {
     platforms: platformCatalog,
     rulePacks: rulePackCatalog,
+    accounts: accountSummaries,
+    currentAccount:
+      accountSummaries.find((account) => account.id === viewer.accountId) ?? null,
     clients: clientsWithRelations,
-    recentAudits: audits.slice(0, 10),
+    recentAudits: visibleAudits.slice(0, 10),
     pdfRenderer: getPdfRendererStatus(),
   };
 }
@@ -426,6 +475,7 @@ export async function createAuditForClient(clientId: string, scope?: AuditScope)
   await store.createJob({
     kind: "audit_run",
     payload: {
+      accountId: client.accountId,
       auditId: audit.id,
       clientId,
     },
@@ -474,13 +524,14 @@ export async function startAuditWorker() {
 }
 
 export async function createClientRecord(
+  accountId: string,
   input: Pick<
     ClientRecord,
     "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus"
   >,
 ) {
   const store = await getStore();
-  return store.createClient(input);
+  return store.createClient(accountId, input);
 }
 
 export async function updateClientRecord(
@@ -532,7 +583,7 @@ export async function syncLocationsForClient(clientId: string) {
   }
   const syncJob = await store.createJob({
     kind: "location_sync",
-    payload: { clientId },
+    payload: { accountId: client.accountId, clientId },
   });
   await store.updateJob(syncJob.id, {
     status: "running",
@@ -554,6 +605,7 @@ export async function syncLocationsForClient(clientId: string) {
     const locations: Omit<LocationRecord, "createdAt" | "updatedAt">[] = merged.locations.map(
       (location) => ({
         id: location.locationId,
+        accountId: client.accountId,
         clientId,
         integrationId:
           eligibleIntegrations.find((integration) => integration.platformKey === "google_business_profile")?.id ??

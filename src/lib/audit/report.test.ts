@@ -6,6 +6,7 @@ import type { ClientRecord, IntegrationRecord } from "./types";
 
 const client: ClientRecord = {
   id: "client_pdf",
+  accountId: "acct_pdf",
   name: "Aurora Health",
   industry: "Healthcare",
   industryLabelPt: "Saude",
@@ -20,6 +21,7 @@ const client: ClientRecord = {
 const integrations: IntegrationRecord[] = [
   {
     id: "int_sc",
+    accountId: client.accountId,
     clientId: client.id,
     platformKey: "google_search_console",
     platformType: "search_visibility",
@@ -31,6 +33,7 @@ const integrations: IntegrationRecord[] = [
   },
   {
     id: "int_gbp",
+    accountId: client.accountId,
     clientId: client.id,
     platformKey: "google_business_profile",
     platformType: "local_presence",
@@ -42,6 +45,7 @@ const integrations: IntegrationRecord[] = [
   },
   {
     id: "int_ga4",
+    accountId: client.accountId,
     clientId: client.id,
     platformKey: "google_analytics",
     platformType: "web_analytics",

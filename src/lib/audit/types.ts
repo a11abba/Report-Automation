@@ -62,6 +62,9 @@ export const integrationAuthOrigins = [
   "oauth",
   "service_account",
 ] as const;
+export const appRoles = ["platform_admin", "account_user"] as const;
+export const accountMembershipStatuses = ["invited", "active", "revoked"] as const;
+export const subscriptionStatuses = ["trialing", "active", "past_due", "paused", "canceled"] as const;
 export const reportLanguages = ["pt-BR", "pt-PT", "en"] as const;
 export const reportFocuses = [
   "full_funnel",
@@ -78,6 +81,9 @@ export type FindingSeverity = (typeof findingSeverities)[number];
 export type FindingStatus = (typeof findingStatuses)[number];
 export type SupportState = (typeof supportStates)[number];
 export type IntegrationAuthOrigin = (typeof integrationAuthOrigins)[number];
+export type AppRole = (typeof appRoles)[number];
+export type AccountMembershipStatus = (typeof accountMembershipStatuses)[number];
+export type SubscriptionStatus = (typeof subscriptionStatuses)[number];
 export type ReportLanguage = (typeof reportLanguages)[number];
 export type ReportFocus = (typeof reportFocuses)[number];
 export type IntegrationConnectionStatus = (typeof integrationConnectionStatuses)[number];
@@ -472,6 +478,7 @@ export interface LocationScore {
 }
 
 export interface AuditReportPayload {
+  accountId: string;
   auditId: string;
   clientId: string;
   clientName: string;
@@ -506,8 +513,45 @@ export interface AuditReportPayload {
   snapshot: NormalizedBusinessSnapshot;
 }
 
+export interface AccountRecord {
+  id: string;
+  name: string;
+  slug: string;
+  subscriptionStatus: SubscriptionStatus;
+  serviceTier: string;
+  billingCycleAnchor: string | null;
+  trialEndsAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserRecord {
+  id: string;
+  email: string;
+  name: string;
+  picture: string | null;
+  locale: "en" | "pt";
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AccountMembershipRecord {
+  id: string;
+  accountId: string;
+  userId: string | null;
+  invitedEmail: string;
+  role: AppRole;
+  status: AccountMembershipStatus;
+  invitedByUserId: string | null;
+  activatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ClientRecord {
   id: string;
+  accountId: string;
   name: string;
   industry: string;
   industryLabelPt: string | null;
@@ -567,6 +611,7 @@ export interface CredentialSecretPayload {
 
 export interface OAuthSessionRecord {
   id: string;
+  accountId: string;
   clientId: string;
   platformKey: PlatformKey;
   codeVerifier: string;
@@ -605,6 +650,7 @@ export interface IntegrationSettings {
 
 export interface IntegrationRecord {
   id: string;
+  accountId: string;
   clientId: string;
   platformKey: PlatformKey;
   platformType: PlatformType;
@@ -617,6 +663,7 @@ export interface IntegrationRecord {
 
 export interface AuditEventRecord {
   id: string;
+  accountId: string;
   auditId: string | null;
   level: AuditEventLevel;
   code: string;
@@ -627,6 +674,7 @@ export interface AuditEventRecord {
 
 export interface JobRecord {
   id: string;
+  accountId: string;
   kind: JobKind;
   status: JobStatus;
   payload: Record<string, unknown>;
@@ -656,6 +704,7 @@ export interface AuditScope {
 
 export interface AuditRecord {
   id: string;
+  accountId: string;
   clientId: string;
   integrationIds: string[];
   scope: AuditScope | null;
@@ -670,6 +719,7 @@ export interface AuditRecord {
 
 export interface LocationRecord {
   id: string;
+  accountId: string;
   clientId: string;
   integrationId: string | null;
   label: string;

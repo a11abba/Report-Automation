@@ -1,16 +1,21 @@
 import { renderReportPdf } from "@/lib/reports";
 import { getAuditDetail } from "@/lib/audit-engine";
-import { getAuthSession } from "@/lib/auth-session-server";
+import { loadAuditForViewer, requireRouteViewer } from "@/lib/route-auth";
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  if (!(await getAuthSession())) {
+  const { viewer } = await requireRouteViewer();
+  if (!viewer) {
     return new Response("Authentication required.", { status: 401 });
   }
   try {
     const { id } = await context.params;
+    const { response: auditResponse } = await loadAuditForViewer(viewer, id);
+    if (auditResponse) {
+      return new Response("Forbidden.", { status: auditResponse.status });
+    }
     const { report } = await getAuditDetail(id);
     if (!report) {
       return new Response("Report not found.", { status: 404 });

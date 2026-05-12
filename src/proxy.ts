@@ -4,7 +4,7 @@ import {
   getSessionCookieOptions,
   readAuthSessionValue,
 } from "@/lib/auth-session";
-import { isAuthorizedSession } from "@/lib/operator-access";
+import { validateAuthSession } from "@/lib/auth-access";
 
 function isPublicPath(pathname: string) {
   return (
@@ -18,16 +18,17 @@ function isPublicPath(pathname: string) {
 
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
-  const session = await readAuthSessionValue(
+  const rawSession = await readAuthSessionValue(
     request.cookies.get(AUTH_SESSION_COOKIE)?.value,
   );
-  const hasAuthorizedSession = isAuthorizedSession(session);
+  const session = await validateAuthSession(rawSession);
+  const hasAuthorizedSession = Boolean(session);
 
   if (hasAuthorizedSession && pathname === "/login") {
     return NextResponse.redirect(new URL("/", request.url));
   }
 
-  if (!hasAuthorizedSession && session) {
+  if (!hasAuthorizedSession && rawSession) {
     const response = isPublicPath(pathname)
       ? NextResponse.next()
       : pathname.startsWith("/api/")

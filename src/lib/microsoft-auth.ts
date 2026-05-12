@@ -91,8 +91,13 @@ export async function buildMicrosoftOAuthUrl(clientId: string, platformKey: Plat
   const codeVerifier = createCodeVerifier();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
   const store = await getStore();
+  const client = await store.getClient(clientId);
+  if (!client) {
+    throw new Error("Client not found.");
+  }
   const session = await store.createOAuthSession({
     id: `oauth_${crypto.randomUUID().replaceAll("-", "")}`,
+    accountId: client.accountId,
     clientId,
     platformKey,
     codeVerifier,

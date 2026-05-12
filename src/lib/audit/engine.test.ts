@@ -5,6 +5,7 @@ import type { ClientRecord, IntegrationRecord } from "./types";
 
 const client: ClientRecord = {
   id: "client_test",
+  accountId: "acct_test",
   name: "Northwind Demo",
   industry: "Retail",
   industryLabelPt: "Varejo",
@@ -23,6 +24,7 @@ function integration(
 ): IntegrationRecord {
   return {
     id,
+    accountId: client.accountId,
     clientId: client.id,
     platformKey,
     platformType,

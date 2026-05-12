@@ -10,6 +10,7 @@ const originalEnv = {
 
 const client: ClientRecord = {
   id: "client_ga4",
+  accountId: "acct_ga4",
   name: "FXR",
   industry: "Retail",
   industryLabelPt: "Varejo",
@@ -29,6 +30,7 @@ function integration(
 ): IntegrationRecord {
   return {
     id: "int_ga4",
+    accountId: client.accountId,
     clientId: client.id,
     platformKey: "google_analytics",
     platformType: "web_analytics",

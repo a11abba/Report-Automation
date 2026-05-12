@@ -7,15 +7,15 @@ This project can be deployed to Hostinger as a Node.js application for a team-on
 - Use Hostinger Node.js hosting on a `Business` or `Cloud` plan for the simplest beta deploy.
 - Use `Node.js 24.x`.
 - Deploy from GitHub when possible so redeploys can pull the latest branch automatically.
-- Keep `DATABASE_URL` empty on managed Hostinger unless you are pointing it to a real PostgreSQL instance for the optional `pg-boss` worker.
+- Point `DATABASE_URL` to a real PostgreSQL instance such as Neon when running the SaaS version.
 
 Hostinger's current support docs say managed Node.js apps can be deployed from GitHub or ZIP on Business/Cloud plans, support `Next.js`, and support Node.js `18.x`, `20.x`, `22.x`, and `24.x`.
 
 ## Why this app works on managed Hostinger
 
 - The web app itself runs as a normal Next.js Node server.
-- Main application data is stored in SQLite and the credential vault on disk.
-- If `DATABASE_URL` is not configured, audit jobs run inline without the separate PostgreSQL queue worker.
+- Main application data, credentials, accounts, and invitations can now live in PostgreSQL.
+- If `DATABASE_URL` is not configured, the app falls back to the local SQLite development store and inline jobs.
 
 That makes managed Hostinger suitable for a team beta, as long as you choose a persistent location for app data.
 
@@ -24,6 +24,8 @@ That makes managed Hostinger suitable for a team beta, as long as you choose a p
 Set these in Hostinger during deployment or in Settings and Redeploy:
 
 ```env
+DATABASE_URL=postgresql://...
+# Optional only for local SQLite fallback:
 AUDIT_DATA_DIR=/absolute/persistent/path/for/audit-platform-data
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
@@ -38,31 +40,29 @@ Optional:
 
 ```env
 PAGESPEED_API_KEY=...
-DATABASE_URL=
 ```
 
 ## Important production notes
 
-### 1. Persist the `data` directory
+### 1. Prefer PostgreSQL in hosted SaaS mode
 
-This app now supports `AUDIT_DATA_DIR`.
+This app now supports `DATABASE_URL` as the primary store.
 
-Point it to a persistent absolute directory that is not recreated on each deploy. This directory will hold:
+For hosted SaaS mode:
 
-- `app.db`
-- `credential-vault.json`
-- the legacy runtime secret file if needed
+- use PostgreSQL for clients, integrations, reports, accounts, invitations, and encrypted credential payloads
+- keep `AUDIT_PLATFORM_SECRET` set so session signing and encryption stay stable across deploys
 
-If you skip this and keep storage inside the deployment bundle, redeploys may replace beta data.
+Use `AUDIT_DATA_DIR` only if you intentionally want the local SQLite fallback.
 
-### 2. Keep the beta restricted to the team
+### 2. Keep platform admin bootstrap restricted
 
-Team access is enforced through Google login plus:
+Platform admin bootstrap can still be restricted through:
 
 - `AUDIT_OPERATOR_EMAILS`
 - `AUDIT_OPERATOR_DOMAINS`
 
-Only allowed accounts will be able to enter the dashboard.
+Invited customer users can log in through their stored account invitations even when they are not on the bootstrap allowlist.
 
 ### 3. Google OAuth must use the public callback URL
 
@@ -76,12 +76,12 @@ Also update `GOOGLE_OAUTH_REDIRECT_URI` in Hostinger to the same URL.
 
 ### 4. Managed Hostinger MySQL is not the same as this app's `DATABASE_URL`
 
-Hostinger's managed plans document MySQL support for databases. In this project, `DATABASE_URL` is only for the optional `pg-boss` worker and must be PostgreSQL.
+Hostinger's managed plans document MySQL support for databases. In this project, `DATABASE_URL` is for the primary SaaS data store and must be PostgreSQL.
 
 For the beta:
 
-- leave `DATABASE_URL` empty on managed Hostinger, or
-- use a VPS or external PostgreSQL instance if you want the separate worker process
+- use an external PostgreSQL instance such as Neon for production-like SaaS behavior
+- leave `DATABASE_URL` empty only for local or temporary SQLite fallback scenarios
 
 ## Suggested Hostinger deploy values
 
@@ -94,8 +94,8 @@ For the beta:
 
 1. Open the temporary Hostinger URL or connected beta domain.
 2. Confirm `/login` loads over HTTPS.
-3. Test Google login with one allowed team account.
-4. Confirm a non-allowed Google account is rejected.
+3. Test Google login with one bootstrap admin account.
+4. Invite one customer user and confirm they can access only their own account.
 5. Create a sample client and verify data survives a restart/redeploy.
 6. Run one audit and export JSON/PDF.
 7. If Google integrations are used, complete one OAuth connection from the deployed domain.

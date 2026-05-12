@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
 import { listLocationsForClient } from "@/lib/audit-engine";
-import { getAuthSession } from "@/lib/auth-session-server";
+import { loadClientForViewer, requireRouteViewer } from "@/lib/route-auth";
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  if (!(await getAuthSession())) {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
-  }
+  const { viewer, response } = await requireRouteViewer();
+  if (!viewer) return response;
   const { id } = await context.params;
+  const { response: clientResponse } = await loadClientForViewer(viewer, id);
+  if (clientResponse) return clientResponse;
   const locations = await listLocationsForClient(id);
   return NextResponse.json({ locations });
 }

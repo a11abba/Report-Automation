@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { createHmac } from "@/services/app-secret";
+import type { AppRole } from "@/lib/audit/types";
 
 export const AUTH_SESSION_COOKIE = "audit_platform_session";
 export const GOOGLE_LOGIN_COOKIE = "audit_platform_google_login";
@@ -7,6 +8,10 @@ export const GOOGLE_LOGIN_COOKIE = "audit_platform_google_login";
 export type AppLocale = "en" | "pt";
 
 export interface AuthSession {
+  userId: string;
+  accountId: string;
+  membershipId: string | null;
+  role: AppRole;
   sub: string;
   email: string;
   name: string;

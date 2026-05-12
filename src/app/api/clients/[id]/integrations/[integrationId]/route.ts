@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { updateIntegrationRecord } from "@/lib/audit-engine";
 import { assertSafeAuditUrl } from "@/lib/audit-url";
-import { getAuthSession } from "@/lib/auth-session-server";
-import { getStore } from "@/lib/storage";
+import { loadClientForViewer, loadIntegrationForViewer, requireRouteViewer } from "@/lib/route-auth";
 
 const updateIntegrationSchema = z.object({
   displayName: z.string().min(2).optional(),
@@ -25,16 +24,19 @@ export async function PATCH(
   request: Request,
   context: { params: Promise<{ id: string; integrationId: string }> },
 ) {
-  if (!(await getAuthSession())) {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
-  }
+  const { viewer, response } = await requireRouteViewer();
+  if (!viewer) return response;
 
   try {
     const { id, integrationId } = await context.params;
+    const { response: clientResponse } = await loadClientForViewer(viewer, id);
+    if (clientResponse) return clientResponse;
     const body = updateIntegrationSchema.parse(await request.json());
-    const store = await getStore();
-    const existing = await store.getIntegration(integrationId);
-    if (!existing || existing.clientId !== id) {
+    const { integration: existing, response: integrationResponse } = await loadIntegrationForViewer(
+      viewer,
+      integrationId,
+    );
+    if (integrationResponse || !existing || existing.clientId !== id) {
       return NextResponse.json({ error: "Integration not found." }, { status: 404 });
     }
 

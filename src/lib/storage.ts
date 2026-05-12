@@ -1,6 +1,8 @@
 import { access, mkdir, readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import {
+  type AccountMembershipRecord,
+  type AccountRecord,
   type AuditEventRecord,
   type AuditRecord,
   type AuditReportPayload,
@@ -11,6 +13,7 @@ import {
   type JobStatus,
   type LocationRecord,
   type OAuthSessionRecord,
+  type UserRecord,
 } from "@/lib/audit/types";
 import { getAuditDataDir, getAuditDataFile } from "@/lib/runtime-paths";
 
@@ -43,9 +46,49 @@ function hydrateReport(report: AuditReportPayload): AuditReportPayload {
 }
 
 export interface AppStore {
+  ensurePlatformAccount(): Promise<AccountRecord>;
+  listAccounts(): Promise<AccountRecord[]>;
+  getAccount(id: string): Promise<AccountRecord | null>;
+  createAccount(
+    input: Pick<
+      AccountRecord,
+      "name" | "subscriptionStatus" | "serviceTier" | "billingCycleAnchor" | "trialEndsAt"
+    >,
+  ): Promise<AccountRecord>;
+  updateAccount(
+    id: string,
+    patch: Partial<
+      Pick<
+        AccountRecord,
+        "name" | "subscriptionStatus" | "serviceTier" | "billingCycleAnchor" | "trialEndsAt"
+      >
+    >,
+  ): Promise<AccountRecord | null>;
+  getUser(id: string): Promise<UserRecord | null>;
+  getUserByEmail(email: string): Promise<UserRecord | null>;
+  upsertUser(input: {
+    email: string;
+    name: string;
+    picture: string | null;
+    locale: UserRecord["locale"];
+  }): Promise<UserRecord>;
+  listAccountMemberships(accountId: string): Promise<AccountMembershipRecord[]>;
+  getMembership(id: string): Promise<AccountMembershipRecord | null>;
+  getMembershipsForEmail(email: string): Promise<AccountMembershipRecord[]>;
+  inviteAccountUser(input: {
+    accountId: string;
+    invitedEmail: string;
+    role: AccountMembershipRecord["role"];
+    invitedByUserId: string | null;
+  }): Promise<AccountMembershipRecord>;
+  activateMembership(id: string, userId: string): Promise<AccountMembershipRecord | null>;
+  storeSecret(secretRef: string, payload: string): Promise<void>;
+  readSecret(secretRef: string): Promise<string | null>;
+  deleteSecret(secretRef: string): Promise<void>;
   listClients(): Promise<ClientRecord[]>;
   getClient(id: string): Promise<ClientRecord | null>;
   createClient(
+    accountId: string,
     input: Pick<
       ClientRecord,
       "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus"
@@ -107,6 +150,15 @@ function createId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 18)}`;
 }
 
+function slugify(input: string) {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "account";
+}
+
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback;
   try {
@@ -154,8 +206,48 @@ class SQLiteStore implements AppStore {
   private ensureSchema() {
     this.db.exec(`
       pragma journal_mode = wal;
+      create table if not exists accounts (
+        id text primary key,
+        name text not null,
+        slug text not null unique,
+        subscription_status text not null,
+        service_tier text not null,
+        billing_cycle_anchor text,
+        trial_ends_at text,
+        created_at text not null,
+        updated_at text not null
+      );
+      create table if not exists users (
+        id text primary key,
+        email text not null unique,
+        name text not null,
+        picture text,
+        locale text not null,
+        last_login_at text,
+        created_at text not null,
+        updated_at text not null
+      );
+      create table if not exists account_members (
+        id text primary key,
+        account_id text not null,
+        user_id text,
+        invited_email text not null,
+        role text not null,
+        status text not null,
+        invited_by_user_id text,
+        activated_at text,
+        created_at text not null,
+        updated_at text not null
+      );
+      create table if not exists credential_secrets (
+        secret_ref text primary key,
+        payload text not null,
+        created_at text not null,
+        updated_at text not null
+      );
       create table if not exists clients (
         id text primary key,
+        account_id text not null,
         name text not null,
         industry text not null,
         industry_label_pt text,
@@ -168,6 +260,7 @@ class SQLiteStore implements AppStore {
       );
       create table if not exists integrations (
         id text primary key,
+        account_id text not null,
         client_id text not null,
         platform_key text not null,
         platform_type text not null,
@@ -179,6 +272,7 @@ class SQLiteStore implements AppStore {
       );
       create table if not exists locations (
         id text primary key,
+        account_id text not null,
         client_id text not null,
         integration_id text,
         label text not null,
@@ -191,6 +285,7 @@ class SQLiteStore implements AppStore {
       );
       create table if not exists audits (
         id text primary key,
+        account_id text not null,
         client_id text not null,
         integration_ids text not null,
         scope text,
@@ -208,6 +303,7 @@ class SQLiteStore implements AppStore {
       );
       create table if not exists oauth_sessions (
         id text primary key,
+        account_id text not null,
         client_id text not null,
         platform_key text not null,
         code_verifier text not null,
@@ -218,6 +314,7 @@ class SQLiteStore implements AppStore {
       );
       create table if not exists audit_events (
         id text primary key,
+        account_id text not null,
         audit_id text,
         level text not null,
         code text not null,
@@ -227,6 +324,7 @@ class SQLiteStore implements AppStore {
       );
       create table if not exists jobs (
         id text primary key,
+        account_id text not null,
         kind text not null,
         status text not null,
         payload text not null,
@@ -238,8 +336,29 @@ class SQLiteStore implements AppStore {
         completed_at text
       );
     `);
+    if (!this.hasColumn("clients", "account_id")) {
+      this.db.exec("alter table clients add column account_id text;");
+    }
     if (!this.hasColumn("clients", "report_focus")) {
       this.db.exec("alter table clients add column report_focus text not null default 'full_funnel';");
+    }
+    if (!this.hasColumn("integrations", "account_id")) {
+      this.db.exec("alter table integrations add column account_id text;");
+    }
+    if (!this.hasColumn("locations", "account_id")) {
+      this.db.exec("alter table locations add column account_id text;");
+    }
+    if (!this.hasColumn("audits", "account_id")) {
+      this.db.exec("alter table audits add column account_id text;");
+    }
+    if (!this.hasColumn("oauth_sessions", "account_id")) {
+      this.db.exec("alter table oauth_sessions add column account_id text;");
+    }
+    if (!this.hasColumn("audit_events", "account_id")) {
+      this.db.exec("alter table audit_events add column account_id text;");
+    }
+    if (!this.hasColumn("jobs", "account_id")) {
+      this.db.exec("alter table jobs add column account_id text;");
     }
   }
 
@@ -252,8 +371,16 @@ class SQLiteStore implements AppStore {
     if (this.migrated) {
       return;
     }
+    const platformAccount = await this.ensurePlatformAccount();
     const row = this.db.prepare("select count(*) as count from clients").get<{ count: number }>();
     if ((row?.count ?? 0) > 0) {
+      this.db.prepare("update clients set account_id = ? where account_id is null or account_id = ''").run(platformAccount.id);
+      this.db.prepare("update integrations set account_id = (select account_id from clients where clients.id = integrations.client_id) where account_id is null or account_id = ''").run();
+      this.db.prepare("update locations set account_id = (select account_id from clients where clients.id = locations.client_id) where account_id is null or account_id = ''").run();
+      this.db.prepare("update audits set account_id = (select account_id from clients where clients.id = audits.client_id) where account_id is null or account_id = ''").run();
+      this.db.prepare("update oauth_sessions set account_id = (select account_id from clients where clients.id = oauth_sessions.client_id) where account_id is null or account_id = ''").run();
+      this.db.prepare("update audit_events set account_id = coalesce((select account_id from audits where audits.id = audit_events.audit_id), ?) where account_id is null or account_id = ''").run(platformAccount.id);
+      this.db.prepare("update jobs set account_id = ? where account_id is null or account_id = ''").run(platformAccount.id);
       this.migrated = true;
       return;
     }
@@ -265,20 +392,20 @@ class SQLiteStore implements AppStore {
     }
 
     const insertClient = this.db.prepare(`
-      insert or ignore into clients (id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      insert or ignore into clients (id, account_id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertIntegration = this.db.prepare(`
-      insert or ignore into integrations (id, client_id, platform_key, platform_type, display_name, credentials, settings, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    const insertLocation = this.db.prepare(`
-      insert or ignore into locations (id, client_id, integration_id, label, business_profile_id, landing_page_url, metrics, findings, created_at, updated_at)
+      insert or ignore into integrations (id, account_id, client_id, platform_key, platform_type, display_name, credentials, settings, created_at, updated_at)
       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const insertAudit = this.db.prepare(`
-      insert or ignore into audits (id, client_id, integration_ids, scope, status, score, grade, created_at, updated_at, completed_at, error_message)
+    const insertLocation = this.db.prepare(`
+      insert or ignore into locations (id, account_id, client_id, integration_id, label, business_profile_id, landing_page_url, metrics, findings, created_at, updated_at)
       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertAudit = this.db.prepare(`
+      insert or ignore into audits (id, account_id, client_id, integration_ids, scope, status, score, grade, created_at, updated_at, completed_at, error_message)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertReport = this.db.prepare(`
       insert or ignore into audit_reports (audit_id, payload) values (?, ?)
@@ -287,6 +414,7 @@ class SQLiteStore implements AppStore {
     for (const client of legacy.clients) {
       insertClient.run(
         client.id,
+        platformAccount.id,
         client.name,
         client.industry,
         client.industryLabelPt,
@@ -301,6 +429,7 @@ class SQLiteStore implements AppStore {
     for (const integration of legacy.integrations) {
       insertIntegration.run(
         integration.id,
+        platformAccount.id,
         integration.clientId,
         integration.platformKey,
         integration.platformType,
@@ -314,6 +443,7 @@ class SQLiteStore implements AppStore {
     for (const location of legacy.locations) {
       insertLocation.run(
         location.id,
+        platformAccount.id,
         location.clientId,
         location.integrationId,
         location.label,
@@ -328,6 +458,7 @@ class SQLiteStore implements AppStore {
     for (const audit of legacy.audits) {
       insertAudit.run(
         audit.id,
+        platformAccount.id,
         audit.clientId,
         JSON.stringify(audit.integrationIds),
         JSON.stringify(audit.scope),
@@ -350,6 +481,7 @@ class SQLiteStore implements AppStore {
   private mapClient(row: Record<string, unknown>): ClientRecord {
     return {
       id: String(row.id),
+      accountId: String(row.account_id),
       name: String(row.name),
       industry: String(row.industry),
       industryLabelPt: (row.industry_label_pt as string | null) ?? null,
@@ -365,6 +497,7 @@ class SQLiteStore implements AppStore {
   private mapIntegration(row: Record<string, unknown>): IntegrationRecord {
     return {
       id: String(row.id),
+      accountId: String(row.account_id),
       clientId: String(row.client_id),
       platformKey: row.platform_key as IntegrationRecord["platformKey"],
       platformType: row.platform_type as IntegrationRecord["platformType"],
@@ -379,6 +512,7 @@ class SQLiteStore implements AppStore {
   private mapLocation(row: Record<string, unknown>): LocationRecord {
     return {
       id: String(row.id),
+      accountId: String(row.account_id),
       clientId: String(row.client_id),
       integrationId: (row.integration_id as string | null) ?? null,
       label: String(row.label),
@@ -394,6 +528,7 @@ class SQLiteStore implements AppStore {
   private mapAudit(row: Record<string, unknown>): AuditRecord {
     return {
       id: String(row.id),
+      accountId: String(row.account_id),
       clientId: String(row.client_id),
       integrationIds: parseJson(String(row.integration_ids), []),
       scope: parseJson(row.scope as string | null, null),
@@ -410,6 +545,7 @@ class SQLiteStore implements AppStore {
   private mapOAuthSession(row: Record<string, unknown>): OAuthSessionRecord {
     return {
       id: String(row.id),
+      accountId: String(row.account_id),
       clientId: String(row.client_id),
       platformKey: row.platform_key as OAuthSessionRecord["platformKey"],
       codeVerifier: String(row.code_verifier),
@@ -423,6 +559,7 @@ class SQLiteStore implements AppStore {
   private mapAuditEvent(row: Record<string, unknown>): AuditEventRecord {
     return {
       id: String(row.id),
+      accountId: String(row.account_id),
       auditId: (row.audit_id as string | null) ?? null,
       level: row.level as AuditEventRecord["level"],
       code: String(row.code),
@@ -435,6 +572,7 @@ class SQLiteStore implements AppStore {
   private mapJob(row: Record<string, unknown>): JobRecord {
     return {
       id: String(row.id),
+      accountId: String(row.account_id),
       kind: row.kind as JobKind,
       status: row.status as JobStatus,
       payload: parseJson(String(row.payload), {}),
@@ -445,6 +583,369 @@ class SQLiteStore implements AppStore {
       startedAt: (row.started_at as string | null) ?? null,
       completedAt: (row.completed_at as string | null) ?? null,
     };
+  }
+
+  private mapAccount(row: Record<string, unknown>): AccountRecord {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      slug: String(row.slug),
+      subscriptionStatus: row.subscription_status as AccountRecord["subscriptionStatus"],
+      serviceTier: String(row.service_tier),
+      billingCycleAnchor: (row.billing_cycle_anchor as string | null) ?? null,
+      trialEndsAt: (row.trial_ends_at as string | null) ?? null,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapUser(row: Record<string, unknown>): UserRecord {
+    return {
+      id: String(row.id),
+      email: String(row.email),
+      name: String(row.name),
+      picture: (row.picture as string | null) ?? null,
+      locale: (row.locale as UserRecord["locale"]) ?? "en",
+      lastLoginAt: (row.last_login_at as string | null) ?? null,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapAccountMembership(row: Record<string, unknown>): AccountMembershipRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      userId: (row.user_id as string | null) ?? null,
+      invitedEmail: String(row.invited_email),
+      role: row.role as AccountMembershipRecord["role"],
+      status: row.status as AccountMembershipRecord["status"],
+      invitedByUserId: (row.invited_by_user_id as string | null) ?? null,
+      activatedAt: (row.activated_at as string | null) ?? null,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  async ensurePlatformAccount() {
+    const existing = this.db
+      .prepare("select * from accounts where slug = ?")
+      .get<Record<string, unknown>>("platform");
+    if (existing) {
+      return this.mapAccount(existing);
+    }
+
+    const now = new Date().toISOString();
+    const account: AccountRecord = {
+      id: createId("acct"),
+      name: "Platform",
+      slug: "platform",
+      subscriptionStatus: "active",
+      serviceTier: "internal",
+      billingCycleAnchor: null,
+      trialEndsAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(`
+        insert into accounts (id, name, slug, subscription_status, service_tier, billing_cycle_anchor, trial_ends_at, created_at, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        account.id,
+        account.name,
+        account.slug,
+        account.subscriptionStatus,
+        account.serviceTier,
+        account.billingCycleAnchor,
+        account.trialEndsAt,
+        account.createdAt,
+        account.updatedAt,
+      );
+    return account;
+  }
+
+  async listAccounts() {
+    await this.ensureMigrated();
+    return this.db
+      .prepare("select * from accounts order by created_at asc")
+      .all<Record<string, unknown>>()
+      .map((row) => this.mapAccount(row));
+  }
+
+  async getAccount(id: string) {
+    await this.ensureMigrated();
+    const row = this.db.prepare("select * from accounts where id = ?").get<Record<string, unknown>>(id);
+    return row ? this.mapAccount(row) : null;
+  }
+
+  async createAccount(
+    input: Pick<
+      AccountRecord,
+      "name" | "subscriptionStatus" | "serviceTier" | "billingCycleAnchor" | "trialEndsAt"
+    >,
+  ) {
+    await this.ensureMigrated();
+    const now = new Date().toISOString();
+    const baseSlug = slugify(input.name);
+    let slug = baseSlug;
+    let suffix = 2;
+    while (
+      this.db.prepare("select 1 as found from accounts where slug = ?").get<{ found: number }>(slug)
+    ) {
+      slug = `${baseSlug}-${suffix++}`;
+    }
+    const account: AccountRecord = {
+      id: createId("acct"),
+      name: input.name,
+      slug,
+      subscriptionStatus: input.subscriptionStatus,
+      serviceTier: input.serviceTier,
+      billingCycleAnchor: input.billingCycleAnchor,
+      trialEndsAt: input.trialEndsAt,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(`
+        insert into accounts (id, name, slug, subscription_status, service_tier, billing_cycle_anchor, trial_ends_at, created_at, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        account.id,
+        account.name,
+        account.slug,
+        account.subscriptionStatus,
+        account.serviceTier,
+        account.billingCycleAnchor,
+        account.trialEndsAt,
+        account.createdAt,
+        account.updatedAt,
+      );
+    return account;
+  }
+
+  async updateAccount(
+    id: string,
+    patch: Partial<
+      Pick<
+        AccountRecord,
+        "name" | "subscriptionStatus" | "serviceTier" | "billingCycleAnchor" | "trialEndsAt"
+      >
+    >,
+  ) {
+    const current = await this.getAccount(id);
+    if (!current) return null;
+    const next: AccountRecord = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare(`
+        update accounts
+        set name = ?, subscription_status = ?, service_tier = ?, billing_cycle_anchor = ?, trial_ends_at = ?, updated_at = ?
+        where id = ?
+      `)
+      .run(
+        next.name,
+        next.subscriptionStatus,
+        next.serviceTier,
+        next.billingCycleAnchor,
+        next.trialEndsAt,
+        next.updatedAt,
+        id,
+      );
+    return next;
+  }
+
+  async getUser(id: string) {
+    await this.ensureMigrated();
+    const row = this.db.prepare("select * from users where id = ?").get<Record<string, unknown>>(id);
+    return row ? this.mapUser(row) : null;
+  }
+
+  async getUserByEmail(email: string) {
+    await this.ensureMigrated();
+    const row = this.db
+      .prepare("select * from users where lower(email) = lower(?)")
+      .get<Record<string, unknown>>(email);
+    return row ? this.mapUser(row) : null;
+  }
+
+  async upsertUser(input: {
+    email: string;
+    name: string;
+    picture: string | null;
+    locale: UserRecord["locale"];
+  }) {
+    await this.ensureMigrated();
+    const current = await this.getUserByEmail(input.email);
+    const now = new Date().toISOString();
+    if (current) {
+      const next: UserRecord = {
+        ...current,
+        name: input.name,
+        picture: input.picture,
+        locale: input.locale,
+        lastLoginAt: now,
+        updatedAt: now,
+      };
+      this.db
+        .prepare(`
+          update users
+          set name = ?, picture = ?, locale = ?, last_login_at = ?, updated_at = ?
+          where id = ?
+        `)
+        .run(next.name, next.picture, next.locale, next.lastLoginAt, next.updatedAt, next.id);
+      return next;
+    }
+
+    const user: UserRecord = {
+      id: createId("user"),
+      email: input.email.toLowerCase(),
+      name: input.name,
+      picture: input.picture,
+      locale: input.locale,
+      lastLoginAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(`
+        insert into users (id, email, name, picture, locale, last_login_at, created_at, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        user.id,
+        user.email,
+        user.name,
+        user.picture,
+        user.locale,
+        user.lastLoginAt,
+        user.createdAt,
+        user.updatedAt,
+      );
+    return user;
+  }
+
+  async listAccountMemberships(accountId: string) {
+    await this.ensureMigrated();
+    return this.db
+      .prepare("select * from account_members where account_id = ? order by created_at asc")
+      .all<Record<string, unknown>>(accountId)
+      .map((row) => this.mapAccountMembership(row));
+  }
+
+  async getMembership(id: string) {
+    await this.ensureMigrated();
+    const row = this.db
+      .prepare("select * from account_members where id = ?")
+      .get<Record<string, unknown>>(id);
+    return row ? this.mapAccountMembership(row) : null;
+  }
+
+  async getMembershipsForEmail(email: string) {
+    await this.ensureMigrated();
+    return this.db
+      .prepare("select * from account_members where lower(invited_email) = lower(?) order by created_at asc")
+      .all<Record<string, unknown>>(email)
+      .map((row) => this.mapAccountMembership(row));
+  }
+
+  async inviteAccountUser(input: {
+    accountId: string;
+    invitedEmail: string;
+    role: AccountMembershipRecord["role"];
+    invitedByUserId: string | null;
+  }) {
+    await this.ensureMigrated();
+    const current = this.db
+      .prepare(
+        "select * from account_members where account_id = ? and lower(invited_email) = lower(?)",
+      )
+      .get<Record<string, unknown>>(input.accountId, input.invitedEmail);
+    if (current) {
+      return this.mapAccountMembership(current);
+    }
+
+    const now = new Date().toISOString();
+    const membership: AccountMembershipRecord = {
+      id: createId("mem"),
+      accountId: input.accountId,
+      userId: null,
+      invitedEmail: input.invitedEmail.toLowerCase(),
+      role: input.role,
+      status: "invited",
+      invitedByUserId: input.invitedByUserId,
+      activatedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(`
+        insert into account_members (id, account_id, user_id, invited_email, role, status, invited_by_user_id, activated_at, created_at, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        membership.id,
+        membership.accountId,
+        membership.userId,
+        membership.invitedEmail,
+        membership.role,
+        membership.status,
+        membership.invitedByUserId,
+        membership.activatedAt,
+        membership.createdAt,
+        membership.updatedAt,
+      );
+    return membership;
+  }
+
+  async activateMembership(id: string, userId: string) {
+    const current = await this.getMembership(id);
+    if (!current) return null;
+    const next: AccountMembershipRecord = {
+      ...current,
+      userId,
+      status: "active",
+      activatedAt: current.activatedAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare(`
+        update account_members
+        set user_id = ?, status = ?, activated_at = ?, updated_at = ?
+        where id = ?
+      `)
+      .run(next.userId, next.status, next.activatedAt, next.updatedAt, id);
+    return next;
+  }
+
+  async storeSecret(secretRef: string, payload: string) {
+    await this.ensureMigrated();
+    const now = new Date().toISOString();
+    this.db
+      .prepare(`
+        insert into credential_secrets (secret_ref, payload, created_at, updated_at)
+        values (?, ?, ?, ?)
+        on conflict(secret_ref) do update set payload = excluded.payload, updated_at = excluded.updated_at
+      `)
+      .run(secretRef, payload, now, now);
+  }
+
+  async readSecret(secretRef: string) {
+    await this.ensureMigrated();
+    const row = this.db
+      .prepare("select payload from credential_secrets where secret_ref = ?")
+      .get<{ payload: string }>(secretRef);
+    return row?.payload ?? null;
+  }
+
+  async deleteSecret(secretRef: string) {
+    await this.ensureMigrated();
+    this.db.prepare("delete from credential_secrets where secret_ref = ?").run(secretRef);
   }
 
   async listClients() {
@@ -461,20 +962,25 @@ class SQLiteStore implements AppStore {
     return row ? this.mapClient(row) : null;
   }
 
-  async createClient(input: Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus">) {
+  async createClient(
+    accountId: string,
+    input: Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus">,
+  ) {
     await this.ensureMigrated();
     const now = new Date().toISOString();
     const client: ClientRecord = {
       id: createId("client"),
+      accountId,
       ...input,
       createdAt: now,
       updatedAt: now,
     };
     this.db.prepare(`
-      insert into clients (id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      insert into clients (id, account_id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       client.id,
+      client.accountId,
       client.name,
       client.industry,
       client.industryLabelPt,
@@ -566,19 +1072,25 @@ class SQLiteStore implements AppStore {
 
   async createIntegration(clientId: string, input: Pick<IntegrationRecord, "platformKey" | "platformType" | "displayName" | "credentials" | "settings">) {
     await this.ensureMigrated();
+    const client = await this.getClient(clientId);
+    if (!client) {
+      throw new Error(`Client ${clientId} not found.`);
+    }
     const now = new Date().toISOString();
     const integration: IntegrationRecord = {
       id: createId("int"),
+      accountId: client.accountId,
       clientId,
       ...input,
       createdAt: now,
       updatedAt: now,
     };
     this.db.prepare(`
-      insert into integrations (id, client_id, platform_key, platform_type, display_name, credentials, settings, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      insert into integrations (id, account_id, client_id, platform_key, platform_type, display_name, credentials, settings, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       integration.id,
+      integration.accountId,
       integration.clientId,
       integration.platformKey,
       integration.platformType,
@@ -632,14 +1144,15 @@ class SQLiteStore implements AppStore {
     const current = await this.listLocationsByClient(clientId);
     this.db.prepare("delete from locations where client_id = ?").run(clientId);
     const insert = this.db.prepare(`
-      insert into locations (id, client_id, integration_id, label, business_profile_id, landing_page_url, metrics, findings, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      insert into locations (id, account_id, client_id, integration_id, label, business_profile_id, landing_page_url, metrics, findings, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const now = new Date().toISOString();
     for (const location of locations) {
       const found = current.find((item) => item.id === location.id);
       insert.run(
         location.id,
+        location.accountId,
         location.clientId,
         location.integrationId,
         location.label,
@@ -678,9 +1191,14 @@ class SQLiteStore implements AppStore {
 
   async createAudit(input: Pick<AuditRecord, "clientId" | "integrationIds" | "scope">) {
     await this.ensureMigrated();
+    const client = await this.getClient(input.clientId);
+    if (!client) {
+      throw new Error(`Client ${input.clientId} not found.`);
+    }
     const now = new Date().toISOString();
     const audit: AuditRecord = {
       id: createId("audit"),
+      accountId: client.accountId,
       clientId: input.clientId,
       integrationIds: input.integrationIds,
       scope: input.scope,
@@ -693,10 +1211,11 @@ class SQLiteStore implements AppStore {
       errorMessage: null,
     };
     this.db.prepare(`
-      insert into audits (id, client_id, integration_ids, scope, status, score, grade, created_at, updated_at, completed_at, error_message)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      insert into audits (id, account_id, client_id, integration_ids, scope, status, score, grade, created_at, updated_at, completed_at, error_message)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       audit.id,
+      audit.accountId,
       audit.clientId,
       JSON.stringify(audit.integrationIds),
       JSON.stringify(audit.scope),
@@ -758,10 +1277,11 @@ class SQLiteStore implements AppStore {
       createdAt: new Date().toISOString(),
     };
     this.db.prepare(`
-      insert into oauth_sessions (id, client_id, platform_key, code_verifier, redirect_uri, scopes, created_at, expires_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?)
+      insert into oauth_sessions (id, account_id, client_id, platform_key, code_verifier, redirect_uri, scopes, created_at, expires_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       session.id,
+      session.accountId,
       session.clientId,
       session.platformKey,
       session.codeVerifier,
@@ -792,10 +1312,11 @@ class SQLiteStore implements AppStore {
       ...input,
     };
     this.db.prepare(`
-      insert into audit_events (id, audit_id, level, code, message, detail, created_at)
-      values (?, ?, ?, ?, ?, ?, ?)
+      insert into audit_events (id, account_id, audit_id, level, code, message, detail, created_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       event.id,
+      event.accountId,
       event.auditId,
       event.level,
       event.code,
@@ -819,6 +1340,7 @@ class SQLiteStore implements AppStore {
     const now = new Date().toISOString();
     const job: JobRecord = {
       id: createId("job"),
+      accountId: typeof input.payload["accountId"] === "string" ? String(input.payload["accountId"]) : "",
       kind: input.kind,
       status: "queued",
       payload: input.payload,
@@ -830,10 +1352,11 @@ class SQLiteStore implements AppStore {
       completedAt: null,
     };
     this.db.prepare(`
-      insert into jobs (id, kind, status, payload, result, error_message, created_at, updated_at, started_at, completed_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      insert into jobs (id, account_id, kind, status, payload, result, error_message, created_at, updated_at, started_at, completed_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       job.id,
+      job.accountId,
       job.kind,
       job.status,
       JSON.stringify(job.payload),
@@ -899,6 +1422,11 @@ let storePromise: Promise<AppStore> | null = null;
 export async function getStore(): Promise<AppStore> {
   if (!storePromise) {
     storePromise = (async () => {
+      const databaseUrl = process.env.DATABASE_URL?.trim();
+      if (databaseUrl && /^postgres(ql)?:\/\//i.test(databaseUrl)) {
+        const { PostgresStore } = await import("@/lib/postgres-store");
+        return new PostgresStore(databaseUrl);
+      }
       await mkdir(dataDir, { recursive: true });
       return new SQLiteStore(sqliteFile);
     })();

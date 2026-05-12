@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { beginMicrosoftOAuth } from "@/lib/audit-engine";
-import { getAuthSession } from "@/lib/auth-session-server";
+import { loadClientForViewer, requireRouteViewer } from "@/lib/route-auth";
 
 const schema = z.object({
   platformKey: z.enum([
@@ -14,13 +14,14 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  if (!(await getAuthSession())) {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
-  }
+  const { viewer, response } = await requireRouteViewer();
+  if (!viewer) return response;
 
   try {
     const body = schema.parse(await request.json());
     const { id } = await context.params;
+    const { response: clientResponse } = await loadClientForViewer(viewer, id);
+    if (clientResponse) return clientResponse;
     const result = await beginMicrosoftOAuth(id, body.platformKey);
     return NextResponse.json(result);
   } catch (error) {

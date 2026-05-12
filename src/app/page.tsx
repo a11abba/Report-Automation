@@ -5,7 +5,7 @@ import { redirectIfUnauthenticated } from "@/lib/auth-session-server";
 
 export default async function Home() {
   const viewer = await redirectIfUnauthenticated();
-  const data = await listDashboardData();
+  const data = await listDashboardData(viewer);
   return (
     <AppProviders>
       <DashboardShell initialData={data} viewer={viewer} />

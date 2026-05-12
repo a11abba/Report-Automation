@@ -11,6 +11,7 @@ const originalEnv = {
 
 const client: ClientRecord = {
   id: "client_msft",
+  accountId: "acct_msft",
   name: "Natural Life Collections",
   industry: "Retail",
   industryLabelPt: "Varejo",
@@ -32,6 +33,7 @@ function integration(
 ): IntegrationRecord {
   return {
     id: `int_${platformKey}`,
+    accountId: client.accountId,
     clientId: client.id,
     platformKey,
     platformType,

@@ -11,7 +11,7 @@ import {
   consumeGoogleLoginCallback,
   readGoogleOAuthState,
 } from "@/lib/google-auth";
-import { assertOperatorAccess } from "@/lib/operator-access";
+import { createSessionFromGoogleLogin } from "@/lib/auth-access";
 
 function renderCallbackPage(payload: Record<string, unknown>) {
   const serialized = JSON.stringify(payload).replaceAll("<", "\\u003c");
@@ -60,14 +60,9 @@ export async function GET(request: Request) {
         ?.slice(`${GOOGLE_LOGIN_COOKIE}=`.length);
 
       const result = await consumeGoogleLoginCallback(url, loginCookieValue);
-      assertOperatorAccess(result.profile.email);
-      const sessionValue = await createAuthSessionValue({
-        sub: result.profile.sub,
-        email: result.profile.email,
-        name: result.profile.name,
-        picture: result.profile.picture ?? null,
-        locale: result.locale,
-      });
+      const sessionValue = await createAuthSessionValue(
+        await createSessionFromGoogleLogin(result.profile, result.locale),
+      );
 
       const response = NextResponse.redirect(new URL("/", request.url), 303);
       response.cookies.set(AUTH_SESSION_COOKIE, sessionValue, getSessionCookieOptions());

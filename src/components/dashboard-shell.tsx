@@ -24,6 +24,43 @@ import type {
 } from "@/lib/audit/types";
 
 interface DashboardData {
+  accounts: Array<{
+    id: string;
+    name: string;
+    slug: string;
+    subscriptionStatus: "trialing" | "active" | "past_due" | "paused" | "canceled";
+    serviceTier: string;
+    billingCycleAnchor: string | null;
+    trialEndsAt: string | null;
+    clientCount: number;
+    readyIntegrations: number;
+    lastAuditAt: string | null;
+    members: Array<{
+      id: string;
+      accountId: string;
+      userId: string | null;
+      invitedEmail: string;
+      role: "platform_admin" | "account_user";
+      status: "invited" | "active" | "revoked";
+      invitedByUserId: string | null;
+      activatedAt: string | null;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  currentAccount: {
+    id: string;
+    name: string;
+    slug: string;
+    subscriptionStatus: "trialing" | "active" | "past_due" | "paused" | "canceled";
+    serviceTier: string;
+    billingCycleAnchor: string | null;
+    trialEndsAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+  } | null;
   platforms: PlatformDefinition[];
   rulePacks: RulePackMetadata[];
   pdfRenderer: {
@@ -178,163 +215,501 @@ export function DashboardShell({
     return apiKey.length === 0;
   };
 
+  const totalLocations = data.clients.reduce((sum, client) => sum + client.locations.length, 0);
+  const liveReadyIntegrations = data.clients.reduce(
+    (sum, client) =>
+      sum + client.integrations.filter((integration) => integration.connectionStatus === "ready").length,
+    0,
+  );
+  const statusPills = [
+    pending ? "Operation running" : "API online",
+    `${liveReadyIntegrations} live integrations`,
+    `${totalLocations} synced locations`,
+    data.pdfRenderer.available ? "PDF export ready" : "PDF export pending",
+  ];
+  const isPlatformAdmin = viewer.role === "platform_admin";
+  const accountOptions = isPlatformAdmin ? data.accounts : data.currentAccount ? [data.currentAccount] : [];
+
   return (
-    <main className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
-      <section className="flex flex-wrap items-center justify-between gap-4 rounded-[1.75rem] border border-[color:var(--line)] bg-white/90 px-5 py-4 shadow-[0_10px_30px_rgba(20,33,61,0.06)] backdrop-blur">
-        <div className="flex items-center gap-4">
-          {viewer.picture ? (
-            <div
-              aria-label={viewer.name}
-              className="h-12 w-12 rounded-full border border-[color:var(--line)] bg-cover bg-center"
-              role="img"
-              style={{ backgroundImage: `url("${viewer.picture}")` }}
-            />
-          ) : (
-            <div className="flex h-12 w-12 items-center justify-center rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] text-sm font-semibold text-[color:var(--ink)]">
-              {viewer.name.slice(0, 1).toUpperCase()}
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(243,193,91,0.12),transparent_24%),radial-gradient(circle_at_85%_12%,rgba(53,130,246,0.16),transparent_18%),linear-gradient(180deg,#091019_0%,#0b111a_48%,#0a0f16_100%)] text-slate-100">
+      <div className="grid min-h-screen lg:grid-cols-[284px_minmax(0,1fr)]">
+        <aside className="border-b border-white/10 bg-[linear-gradient(180deg,rgba(20,28,41,0.96)_0%,rgba(16,23,35,0.96)_100%)] px-5 py-6 lg:border-b-0 lg:border-r">
+          <div className="flex items-center gap-4">
+            <div className="flex h-14 w-14 items-center justify-center rounded-[1.2rem] bg-[linear-gradient(135deg,#f3c15b_0%,#d9a930_100%)] text-lg font-semibold tracking-[-0.04em] text-[#11161f] shadow-[0_20px_40px_rgba(243,193,91,0.24)]">
+              OA
             </div>
-          )}
-          <div>
-            <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--muted)]">
+            <div>
+              <p className="text-2xl font-semibold tracking-[-0.05em] text-white">
+                Audit Studio
+              </p>
+              <p className="mt-1 text-sm text-slate-400">Client-ready growth operations</p>
+            </div>
+          </div>
+
+          <nav className="mt-10 grid gap-3">
+            <a
+              href="#overview"
+              className="flex items-center justify-between rounded-[1.25rem] border border-[#8f7a2f] bg-[#ffffff10] px-4 py-4 text-sm font-medium text-[#f4d98c] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+            >
+              <span>Overview</span>
+              <span className="text-xs uppercase tracking-[0.24em] text-[#d8be6c]">Live</span>
+            </a>
+            <a
+              href="#workspace"
+              className="rounded-[1.25rem] border border-white/8 bg-white/[0.03] px-4 py-4 text-sm font-medium text-slate-300 transition hover:border-white/16 hover:bg-white/[0.05]"
+            >
+              Workspace
+            </a>
+            <a
+              href="#new-client"
+              className="rounded-[1.25rem] border border-white/8 bg-white/[0.03] px-4 py-4 text-sm font-medium text-slate-300 transition hover:border-white/16 hover:bg-white/[0.05]"
+            >
+              New client
+            </a>
+          </nav>
+
+          <div className="mt-10 rounded-[1.75rem] border border-white/10 bg-[#111925] p-5 shadow-[0_24px_55px_rgba(0,0,0,0.25)]">
+            <p className="text-[11px] uppercase tracking-[0.32em] text-slate-500">
               Session active
             </p>
-            <p className="mt-1 text-lg font-semibold tracking-[-0.03em] text-[color:var(--ink)]">
-              {viewer.name}
+            <div className="mt-4 flex items-center gap-4">
+              {viewer.picture ? (
+                <div
+                  aria-label={viewer.name}
+                  className="h-12 w-12 rounded-full border border-white/10 bg-cover bg-center"
+                  role="img"
+                  style={{ backgroundImage: `url("${viewer.picture}")` }}
+                />
+              ) : (
+                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-[#1a2433] text-sm font-semibold text-white">
+                  {viewer.name.slice(0, 1).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                <p className="truncate text-base font-semibold text-white">{viewer.name}</p>
+                <p className="truncate text-sm text-slate-400">{viewer.email}</p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-wrap gap-2">
+              <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-emerald-200">
+                Google session
+              </span>
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-slate-400">
+                {viewer.role === "platform_admin" ? "Platform admin" : "Account user"}
+              </span>
+              {data.currentAccount ? (
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-slate-400">
+                  {data.currentAccount.name}
+                </span>
+              ) : null}
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-slate-400">
+                Bilingual access
+              </span>
+            </div>
+
+            <form action="/api/auth/logout" method="post" className="mt-5">
+              <button
+                type="submit"
+                className="w-full rounded-full border border-white/12 bg-white/[0.03] px-4 py-3 text-sm font-medium text-slate-100 transition hover:border-white/24 hover:bg-white/[0.08]"
+              >
+                Sign out
+              </button>
+            </form>
+          </div>
+
+          <div className="mt-6 rounded-[1.5rem] border border-white/8 bg-[#0f1723] p-5">
+            <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500">Run summary</p>
+            <div className="mt-4 grid gap-4">
+              <div>
+                <p className="text-3xl font-semibold tracking-[-0.04em] text-white">
+                  {data.recentAudits.length}
+                </p>
+                <p className="mt-1 text-sm text-slate-400">Recent audits</p>
+              </div>
+              <div>
+                <p className="text-3xl font-semibold tracking-[-0.04em] text-white">
+                  {liveReadyIntegrations}
+                </p>
+                <p className="mt-1 text-sm text-slate-400">Integrations ready</p>
+              </div>
+            </div>
+          </div>
+
+          <section className="mt-6 rounded-[2rem] border border-white/10 bg-[#151d29] p-6 shadow-[0_24px_70px_rgba(0,0,0,0.25)]">
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Extension Kit</p>
+            <h3 className="mt-3 text-xl font-semibold text-white">
+              Internal browser extension flow
+            </h3>
+            <p className="mt-3 text-sm leading-6 text-slate-400">
+              Use the extension to detect the current Google, website, or platform context and jump
+              straight into the correct client audit. The dashboard remains the source of truth.
             </p>
-            <p className="text-sm text-[color:var(--muted)]">{viewer.email}</p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-2 text-xs uppercase tracking-[0.24em] text-[color:var(--muted)]">
-            Sessao Google / Google session
-          </span>
-          <form action="/api/auth/logout" method="post">
-            <button
-              type="submit"
-              className="rounded-full border border-[color:var(--ink)] px-4 py-2 text-sm font-medium text-[color:var(--ink)] transition hover:bg-[color:var(--ink)] hover:text-[color:var(--paper)]"
+            <a
+              className="mt-4 inline-block text-sm text-[#f3c15b] underline"
+              href="apps/extension/README.md"
             >
-              Sair / Sign out
-            </button>
-          </form>
-        </div>
-      </section>
+              Open extension scaffold
+            </a>
+          </section>
 
-      <section className="grid gap-6 lg:grid-cols-[1.35fr_0.95fr]">
-        <div className="rounded-[2rem] border border-[color:var(--line)] bg-[color:var(--ink)] p-8 text-[color:var(--paper)] shadow-[0_30px_80px_rgba(10,13,26,0.18)]">
-          <p className="text-xs uppercase tracking-[0.35em] text-[color:var(--gold)]">
-            Open API Audit Studio
-          </p>
-          <h1 className="mt-4 max-w-3xl text-4xl font-semibold tracking-[-0.04em] sm:text-5xl">
-            Client-ready growth audits across Google, website, CRM, commerce, and lifecycle.
-          </h1>
-          <p className="mt-4 max-w-2xl text-base leading-7 text-[color:var(--mist)]">
-            The dashboard is the client-facing product. Your extension becomes the internal
-            operator that detects the active account or site and jumps the team into the right audit.
-          </p>
-          <div className="mt-6 inline-flex rounded-full border border-white/12 bg-white/8 px-4 py-2 text-xs uppercase tracking-[0.22em] text-[color:var(--mist)]">
-            Login bilingue com Google ativo
-          </div>
-          <div className="mt-8 grid gap-4 sm:grid-cols-4">
-            <StatCard label="Clients" value={String(data.clients.length)} />
-            <StatCard label="Audits" value={String(data.recentAudits.length)} />
-            <StatCard label="Platforms" value={String(data.platforms.length)} />
-            <StatCard label="Rule Packs" value={String(data.rulePacks.length)} />
-          </div>
-        </div>
-
-        <div className="rounded-[2rem] border border-[color:var(--line)] bg-white p-6 shadow-[0_16px_40px_rgba(20,33,61,0.08)]">
-          <h2 className="text-2xl font-semibold tracking-[-0.03em]">New client</h2>
-          <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-            Create the client, set the primary domain, then attach the data sources you want to audit.
-          </p>
-          <form
-            className="mt-6 flex flex-col gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const formData = new FormData(event.currentTarget);
-              const name = String(formData.get("name") ?? "");
-              const industry = String(formData.get("industry") ?? "");
-              const industryLabelPt = String(formData.get("industryLabelPt") ?? "");
-              const primaryDomain = String(formData.get("primaryDomain") ?? "");
-              const operatingModel = String(formData.get("operatingModel") ?? "single_source");
-              const reportLanguage = String(formData.get("reportLanguage") ?? "pt-BR");
-              const reportFocus = String(formData.get("reportFocus") ?? "full_funnel");
-              runTask(
-                () =>
-                  postJson("/api/clients", {
-                    name,
-                    industry,
-                    industryLabelPt: industryLabelPt || null,
-                    operatingModel,
-                    primaryDomain: primaryDomain || null,
-                    reportLanguage,
-                    reportFocus,
-                  }),
-                `Client "${name}" created.`,
-              );
-              event.currentTarget.reset();
-            }}
+          <section
+            id="platforms"
+            className="mt-6 rounded-[2rem] border border-white/10 bg-[#151d29] p-6 shadow-[0_24px_70px_rgba(0,0,0,0.25)]"
           >
-            <Input name="name" placeholder="Client name" required />
-            <Input name="industry" placeholder="Industry or vertical" required />
-            <Input
-              name="industryLabelPt"
-              placeholder="Portuguese report label (optional, used only for PT reports)"
-            />
-            <Input name="primaryDomain" placeholder="https://example.com" />
-            <select
-              name="reportLanguage"
-              className="rounded-2xl border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm outline-none"
-              defaultValue="pt-BR"
-            >
-              <option value="pt-BR">Report in pt-BR</option>
-              <option value="pt-PT">Report in pt-PT</option>
-              <option value="en">Report in English</option>
-            </select>
-            <select
-              name="operatingModel"
-              className="rounded-2xl border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm outline-none"
-              defaultValue="single_source"
-            >
-              <option value="single_source">Single source</option>
-              <option value="composed_source">Composed source</option>
-            </select>
-            <select
-              name="reportFocus"
-              className="rounded-2xl border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm outline-none"
-              defaultValue="full_funnel"
-            >
-              <option value="full_funnel">Full funnel report</option>
-              <option value="lifecycle_marketing">Lifecycle / Email report</option>
-              <option value="seo_local">SEO / Local report</option>
-              <option value="paid_media">Paid media report</option>
-            </select>
-            <button
-              type="submit"
-              className="rounded-full bg-[color:var(--signal)] px-5 py-3 text-sm font-semibold text-[color:var(--paper)] disabled:opacity-50"
-              disabled={pending}
-            >
-              {pending ? "Saving..." : "Create client"}
-            </button>
-          </form>
-          {message ? <p className="mt-4 text-sm text-[color:var(--muted)]">{message}</p> : null}
-          {!data.pdfRenderer.available ? (
-            <p className="mt-2 text-sm text-amber-700">{data.pdfRenderer.message}</p>
-          ) : null}
-        </div>
-      </section>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Platforms</p>
+            <div className="mt-4 grid gap-3">
+              {data.platforms.map((platform) => (
+                <article
+                  key={platform.key}
+                  className="rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="font-semibold text-white">{platform.name}</h3>
+                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-slate-400">
+                      {platform.launchStage}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                    {platform.description}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </section>
+        </aside>
 
-      <section className="grid gap-6 xl:grid-cols-[1.3fr_0.7fr]">
-        <div className="rounded-[2rem] border border-[color:var(--line)] bg-white p-6 shadow-[0_16px_40px_rgba(20,33,61,0.08)]">
-          <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--muted)]">
-            Client Workspace
-          </p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">
-            Brand summary, Google setup, locations, and report runs
-          </h2>
+        <div className="min-w-0">
+          <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0b111a]/90 backdrop-blur-xl">
+            <div className="flex flex-col gap-4 px-4 py-5 sm:px-6 lg:px-8">
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.32em] text-slate-500">
+                    Prospecting-style dashboard
+                  </p>
+                  <h1 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">
+                    Guided client audit operations
+                  </h1>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {statusPills.map((pill) => (
+                    <span
+                      key={pill}
+                      className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-300"
+                    >
+                      {pill}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              {message ? (
+                <div className="rounded-[1.25rem] border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                  {message}
+                </div>
+              ) : null}
+              {!data.pdfRenderer.available ? (
+                <div className="rounded-[1.25rem] border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                  {data.pdfRenderer.message}
+                </div>
+              ) : null}
+            </div>
+          </header>
 
-          <div className="mt-6 grid gap-4">
+          <main className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+            <section id="overview" className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
+              <div className="rounded-[2rem] border border-white/10 bg-[linear-gradient(135deg,#182230_0%,#121a26_58%,#20251f_100%)] p-8 shadow-[0_30px_90px_rgba(0,0,0,0.32)]">
+                <p className="text-xs uppercase tracking-[0.34em] text-[#f3c15b]">
+                  Open API Audit Studio
+                </p>
+                <h2 className="mt-5 max-w-3xl text-4xl font-semibold tracking-[-0.05em] text-white sm:text-5xl">
+                  Structure the workspace like an operator cockpit, not a generic admin page.
+                </h2>
+                <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
+                  The dashboard now moves toward a guided layout: tighter navigation, stronger
+                  hierarchy, and clearer staging between summary, setup, and report execution.
+                </p>
+                <div className="mt-7 inline-flex rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-xs uppercase tracking-[0.22em] text-slate-300">
+                  Google login active and client workspace live
+                </div>
+                <div className="mt-8 grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
+                  <FastNavigationCard clients={data.clients} />
+                  <StatCard label="Audits" value={String(data.recentAudits.length)} />
+                  <StatCard label="Platforms" value={String(data.platforms.length)} />
+                  <StatCard label="Rule Packs" value={String(data.rulePacks.length)} />
+                </div>
+              </div>
+
+              <div
+                id="new-client"
+                className="rounded-[2rem] border border-white/10 bg-[#151d29] p-6 shadow-[0_24px_70px_rgba(0,0,0,0.28)]"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
+                      {isPlatformAdmin ? "New client" : "Account access"}
+                    </p>
+                    <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-white">
+                      {isPlatformAdmin ? "Start a new audit workspace" : "Use your shared customer workspace"}
+                    </h2>
+                  </div>
+                  <span className="rounded-full border border-[#8f7a2f] bg-[#f3c15b14] px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-[#f3d78f]">
+                    {isPlatformAdmin ? "Setup" : "Live"}
+                  </span>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-slate-400">
+                  {isPlatformAdmin
+                    ? "Create the client, choose the report lens, and attach it to the right customer account."
+                    : "Connect your integrations, run audits manually, and review reports inside the account we provisioned for you."}
+                </p>
+                {isPlatformAdmin ? (
+                  <form
+                    className="mt-6 flex flex-col gap-3"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      const formData = new FormData(event.currentTarget);
+                      const accountId = String(formData.get("accountId") ?? "");
+                      const name = String(formData.get("name") ?? "");
+                      const industry = String(formData.get("industry") ?? "");
+                      const industryLabelPt = String(formData.get("industryLabelPt") ?? "");
+                      const primaryDomain = String(formData.get("primaryDomain") ?? "");
+                      const operatingModel = String(formData.get("operatingModel") ?? "single_source");
+                      const reportLanguage = String(formData.get("reportLanguage") ?? "pt-BR");
+                      const reportFocus = String(formData.get("reportFocus") ?? "full_funnel");
+                      runTask(
+                        () =>
+                          postJson("/api/clients", {
+                            accountId,
+                            name,
+                            industry,
+                            industryLabelPt: industryLabelPt || null,
+                            operatingModel,
+                            primaryDomain: primaryDomain || null,
+                            reportLanguage,
+                            reportFocus,
+                          }),
+                        `Client "${name}" created.`,
+                      );
+                      event.currentTarget.reset();
+                    }}
+                  >
+                    <select
+                      name="accountId"
+                      className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                      defaultValue={accountOptions[0]?.id ?? ""}
+                      required
+                    >
+                      {accountOptions.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Input name="name" placeholder="Client name" required />
+                    <Input name="industry" placeholder="Industry or vertical" required />
+                    <Input
+                      name="industryLabelPt"
+                      placeholder="Portuguese report label (optional, used only for PT reports)"
+                    />
+                    <Input name="primaryDomain" placeholder="https://example.com" />
+                    <select
+                      name="reportLanguage"
+                      className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                      defaultValue="pt-BR"
+                    >
+                      <option value="pt-BR">Report in pt-BR</option>
+                      <option value="pt-PT">Report in pt-PT</option>
+                      <option value="en">Report in English</option>
+                    </select>
+                    <select
+                      name="operatingModel"
+                      className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                      defaultValue="single_source"
+                    >
+                      <option value="single_source">Single source</option>
+                      <option value="composed_source">Composed source</option>
+                    </select>
+                    <select
+                      name="reportFocus"
+                      className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                      defaultValue="full_funnel"
+                    >
+                      <option value="full_funnel">Full funnel report</option>
+                      <option value="lifecycle_marketing">Lifecycle / Email report</option>
+                      <option value="seo_local">SEO / Local report</option>
+                      <option value="paid_media">Paid media report</option>
+                    </select>
+                    <button
+                      type="submit"
+                      className="rounded-full bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-5 py-3 text-sm font-semibold text-[#11161f] shadow-[0_18px_40px_rgba(243,193,91,0.25)] disabled:opacity-50"
+                      disabled={pending}
+                    >
+                      {pending ? "Saving..." : "Create client"}
+                    </button>
+                  </form>
+                ) : (
+                  <div className="mt-6 rounded-[1.5rem] border border-white/10 bg-[#0e1621] p-5">
+                    <p className="text-sm text-slate-300">
+                      Account: <span className="font-semibold text-white">{data.currentAccount?.name ?? "Assigned workspace"}</span>
+                    </p>
+                    <p className="mt-2 text-sm text-slate-400">
+                      Plan: {data.currentAccount?.serviceTier ?? "starter"} · Status: {data.currentAccount?.subscriptionStatus ?? "active"}
+                    </p>
+                    <p className="mt-3 text-sm leading-6 text-slate-400">
+                      Client creation and subscription changes stay with the platform admin. Your team can use the workspace below to connect APIs and generate reports.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section id="workspace" className="mt-6">
+              {isPlatformAdmin ? (
+                <section className="mb-6 rounded-[2rem] border border-white/10 bg-[#121a26] p-6 shadow-[0_24px_70px_rgba(0,0,0,0.24)]">
+                  <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
+                        Accounts
+                      </p>
+                      <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">
+                        Provision customer access
+                      </h2>
+                      <p className="mt-3 text-sm leading-6 text-slate-400">
+                        Create the customer account, set subscription metadata, and invite the first workspace user before wiring clients and integrations.
+                      </p>
+                      <form
+                        className="mt-5 grid gap-3"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          const formData = new FormData(event.currentTarget);
+                          const name = String(formData.get("name") ?? "");
+                          const primaryUserEmail = String(formData.get("primaryUserEmail") ?? "");
+                          const serviceTier = String(formData.get("serviceTier") ?? "starter");
+                          const subscriptionStatus = String(formData.get("subscriptionStatus") ?? "trialing");
+                          runTask(
+                            () =>
+                              postJson("/api/accounts", {
+                                name,
+                                primaryUserEmail: primaryUserEmail || null,
+                                serviceTier,
+                                subscriptionStatus,
+                              }),
+                            `Account "${name}" provisioned.`,
+                          );
+                          event.currentTarget.reset();
+                        }}
+                      >
+                        <Input name="name" placeholder="Account name" required />
+                        <Input name="primaryUserEmail" placeholder="First user email (optional)" />
+                        <select
+                          name="serviceTier"
+                          className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                          defaultValue="starter"
+                        >
+                          <option value="starter">Starter</option>
+                          <option value="growth">Growth</option>
+                          <option value="agency">Agency</option>
+                        </select>
+                        <select
+                          name="subscriptionStatus"
+                          className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                          defaultValue="trialing"
+                        >
+                          <option value="trialing">Trialing</option>
+                          <option value="active">Active</option>
+                          <option value="past_due">Past due</option>
+                          <option value="paused">Paused</option>
+                          <option value="canceled">Canceled</option>
+                        </select>
+                        <button
+                          type="submit"
+                          className="rounded-full bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-5 py-3 text-sm font-semibold text-[#11161f] shadow-[0_18px_40px_rgba(243,193,91,0.25)] disabled:opacity-50"
+                          disabled={pending}
+                        >
+                          {pending ? "Saving..." : "Create account"}
+                        </button>
+                      </form>
+                    </div>
+
+                    <div className="grid gap-4">
+                      {data.accounts.map((account) => (
+                        <article
+                          key={account.id}
+                          className="rounded-[1.5rem] border border-white/10 bg-[#182230] p-5"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <h3 className="text-lg font-semibold text-white">{account.name}</h3>
+                              <p className="mt-1 text-sm text-slate-400">
+                                {account.serviceTier} · {account.subscriptionStatus} · {account.clientCount} clients
+                              </p>
+                            </div>
+                            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-slate-400">
+                              {account.readyIntegrations} ready
+                            </span>
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {account.members.length === 0 ? (
+                              <EmptyPill text="No invited users yet" />
+                            ) : (
+                              account.members.map((member) => (
+                                <span
+                                  key={member.id}
+                                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300"
+                                >
+                                  {member.invitedEmail} · {member.role} · {member.status}
+                                </span>
+                              ))
+                            )}
+                          </div>
+                          <form
+                            className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto_auto]"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              const formData = new FormData(event.currentTarget);
+                              const email = String(formData.get("email") ?? "");
+                              const role = String(formData.get("role") ?? "account_user");
+                              runTask(
+                                () =>
+                                  postJson(`/api/accounts/${account.id}/members`, {
+                                    email,
+                                    role,
+                                  }),
+                                `Invite created for ${email}.`,
+                              );
+                              event.currentTarget.reset();
+                            }}
+                          >
+                            <Input name="email" placeholder="Invite user by email" required />
+                            <select
+                              name="role"
+                              className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                              defaultValue="account_user"
+                            >
+                              <option value="account_user">Account user</option>
+                              <option value="platform_admin">Platform admin</option>
+                            </select>
+                            <button
+                              type="submit"
+                              className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 transition hover:bg-white/[0.08]"
+                            >
+                              Invite user
+                            </button>
+                          </form>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              ) : null}
+              <div className="rounded-[2rem] border border-white/10 bg-[#121a26] p-6 shadow-[0_24px_70px_rgba(0,0,0,0.24)]">
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
+                  Client Workspace
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">
+                  Brand summary, integrations, locations, and report runs
+                </h2>
+
+                <div className="mt-6 grid gap-4">
             {data.clients.length === 0 ? (
               <EmptyState text="Create your first client to unlock integrations, locations, and reports." />
             ) : (
@@ -345,40 +720,43 @@ export function DashboardShell({
 
                 return (
                   <article
+                    id={`client-${client.id}`}
                     key={client.id}
-                    className="rounded-[1.5rem] border border-[color:var(--line)] bg-[color:var(--shell)] p-5"
+                    className="rounded-[1.75rem] border border-white/10 bg-[#182230] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-4">
                       <div>
-                        <h3 className="text-xl font-semibold">{client.name}</h3>
-                        <p className="mt-1 text-sm text-[color:var(--muted)]">
+                        <h3 className="text-xl font-semibold text-white">{client.name}</h3>
+                        <p className="mt-1 text-sm text-slate-400">
                           {client.industry} {"\u00b7"} {client.operatingModel.replace("_", " ")}
                         </p>
-                        <p className="mt-1 text-sm text-[color:var(--muted)]">
+                        <p className="mt-1 text-sm text-slate-400">
                           {client.primaryDomain ?? "No primary domain"}
                         </p>
-                        <p className="mt-1 text-sm text-[color:var(--muted)]">
+                        <p className="mt-1 text-sm text-slate-400">
                           Report language: {client.reportLanguage}
                           {client.industryLabelPt ? ` \u00b7 PT label: ${client.industryLabelPt}` : ""}
                         </p>
-                        <p className="mt-1 text-sm text-[color:var(--muted)]">
+                        <p className="mt-1 text-sm text-slate-400">
                           Report focus: {getReportFocusLabel("en", client.reportFocus)}
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
+                        {isPlatformAdmin ? (
+                          <button
+                            className="rounded-full border border-rose-500/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200 transition hover:bg-rose-500/15"
+                            onClick={() => {
+                              setDeleteIntentClientId(client.id);
+                              setDeleteConfirmationText("");
+                              setMessage(null);
+                            }}
+                            type="button"
+                          >
+                            Remove client
+                          </button>
+                        ) : null}
                         <button
-                          className="rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700 transition hover:bg-rose-100"
-                          onClick={() => {
-                            setDeleteIntentClientId(client.id);
-                            setDeleteConfirmationText("");
-                            setMessage(null);
-                          }}
-                          type="button"
-                        >
-                          Remove client
-                        </button>
-                        <button
-                          className="rounded-full border border-[color:var(--line)] bg-white px-4 py-2 text-sm"
+                          className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200 transition hover:bg-white/[0.08]"
                           onClick={() =>
                             runTask(
                               () => postJson(`/api/clients/${client.id}/locations/sync`, {}),
@@ -389,7 +767,7 @@ export function DashboardShell({
                           Sync locations
                         </button>
                         <button
-                          className="rounded-full border border-[color:var(--ink)] px-4 py-2 text-sm font-medium text-[color:var(--ink)] transition hover:bg-[color:var(--ink)] hover:text-[color:var(--paper)] disabled:opacity-50"
+                          className="rounded-full border border-[#8f7a2f] bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-4 py-2 text-sm font-medium text-[#11161f] transition hover:brightness-105 disabled:opacity-50"
                           disabled={pending || connectedIntegrations.length === 0}
                           onClick={() =>
                             runTask(
@@ -404,11 +782,11 @@ export function DashboardShell({
                     </div>
 
                     {deleteIntentClientId === client.id ? (
-                      <div className="mt-4 rounded-[1.25rem] border border-rose-200 bg-rose-50/80 p-4">
-                        <p className="text-sm font-medium text-rose-800">
+                      <div className="mt-4 rounded-[1.25rem] border border-rose-500/20 bg-rose-500/10 p-4">
+                        <p className="text-sm font-medium text-rose-100">
                           Confirm client removal
                         </p>
-                        <p className="mt-2 text-sm leading-6 text-rose-700">
+                        <p className="mt-2 text-sm leading-6 text-rose-200/90">
                           This removes the client, integrations, synced locations, and audit
                           history. Type <strong>{client.name}</strong> to confirm.
                         </p>
@@ -420,7 +798,7 @@ export function DashboardShell({
                           />
                           <button
                             type="button"
-                            className="rounded-full border border-rose-200 bg-white px-4 py-3 text-sm text-rose-700"
+                            className="rounded-full border border-rose-500/20 bg-white/5 px-4 py-3 text-sm text-rose-100"
                             onClick={() => {
                               setDeleteIntentClientId(null);
                               setDeleteConfirmationText("");
@@ -466,7 +844,7 @@ export function DashboardShell({
                     >
                       <select
                         name="reportLanguage"
-                        className="rounded-2xl border border-[color:var(--line)] bg-white px-4 py-3 text-sm outline-none"
+                        className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
                         defaultValue={client.reportLanguage}
                       >
                         <option value="pt-BR">Report in pt-BR</option>
@@ -475,7 +853,7 @@ export function DashboardShell({
                       </select>
                       <select
                         name="reportFocus"
-                        className="rounded-2xl border border-[color:var(--line)] bg-white px-4 py-3 text-sm outline-none"
+                        className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
                         defaultValue={client.reportFocus}
                       >
                         <option value="full_funnel">Full funnel report</option>
@@ -490,7 +868,7 @@ export function DashboardShell({
                       />
                       <button
                         type="submit"
-                        className="rounded-full border border-[color:var(--line)] bg-white px-4 py-3 text-sm"
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 transition hover:bg-white/[0.08]"
                       >
                         Save report settings
                       </button>
@@ -500,7 +878,7 @@ export function DashboardShell({
                       <select
                         form={`integration-${client.id}`}
                         name="platformKey"
-                        className="rounded-2xl border border-[color:var(--line)] bg-white px-4 py-3 text-sm outline-none"
+                        className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
                         defaultValue="website_crawler"
                       >
                         {data.platforms.map((platform) => (
@@ -533,7 +911,7 @@ export function DashboardShell({
                       <button
                         form={`integration-${client.id}`}
                         type="submit"
-                        className="rounded-full bg-[color:var(--ink)] px-5 py-3 text-sm font-semibold text-[color:var(--paper)]"
+                        className="rounded-full bg-white px-5 py-3 text-sm font-semibold text-[#101720]"
                       >
                         Add integration
                       </button>
@@ -567,31 +945,31 @@ export function DashboardShell({
 
                     <div className="mt-5 flex flex-wrap gap-2">
                       <button
-                        className="rounded-full border border-[color:var(--line)] bg-white px-3 py-2 text-xs uppercase tracking-[0.2em]"
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-200"
                         onClick={() => launchGoogleOAuth(client.id, "google_search_console")}
                       >
                         Connect Search Console
                       </button>
                       <button
-                        className="rounded-full border border-[color:var(--line)] bg-white px-3 py-2 text-xs uppercase tracking-[0.2em]"
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-200"
                         onClick={() => launchGoogleOAuth(client.id, "google_business_profile")}
                       >
                         Connect Business Profile
                       </button>
                       <button
-                        className="rounded-full border border-[color:var(--line)] bg-white px-3 py-2 text-xs uppercase tracking-[0.2em]"
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-200"
                         onClick={() => launchGoogleOAuth(client.id, "google_analytics")}
                       >
                         Connect GA4
                       </button>
                       <button
-                        className="rounded-full border border-[color:var(--line)] bg-white px-3 py-2 text-xs uppercase tracking-[0.2em]"
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-200"
                         onClick={() => launchMicrosoftOAuth(client.id, "microsoft_ads")}
                       >
                         Connect Microsoft Ads
                       </button>
                       <button
-                        className="rounded-full border border-[color:var(--line)] bg-white px-3 py-2 text-xs uppercase tracking-[0.2em]"
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-200"
                         onClick={() => launchMicrosoftOAuth(client.id, "microsoft_merchant_center")}
                       >
                         Connect Merchant Center
@@ -605,14 +983,14 @@ export function DashboardShell({
                         client.integrations.map((integration) => (
                           <article
                             key={integration.id}
-                            className="rounded-[1.25rem] border border-[color:var(--line)] bg-white p-4"
+                            className="rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4"
                           >
                             <div className="flex flex-wrap items-start justify-between gap-3">
                               <div>
-                                <p className="font-medium text-[color:var(--ink)]">
+                                <p className="font-medium text-white">
                                   {integration.displayName}
                                 </p>
-                                <p className="mt-1 text-sm text-[color:var(--muted)]">
+                                <p className="mt-1 text-sm text-slate-400">
                                   {integration.platformKey}
                                   {integration.credentials.authOrigin
                                     ? ` \u00b7 ${integration.credentials.authOrigin}`
@@ -622,7 +1000,7 @@ export function DashboardShell({
                               <StatusBadge status={integration.connectionStatus} />
                             </div>
 
-                            <p className="mt-3 text-sm leading-6 text-[color:var(--muted)]">
+                            <p className="mt-3 text-sm leading-6 text-slate-400">
                               {integration.validationMessage}
                             </p>
 
@@ -676,7 +1054,7 @@ export function DashboardShell({
                                 />
                                 <button
                                   type="submit"
-                                  className="rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm"
+                                  className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
                                 >
                                   Save GA4 property
                                 </button>
@@ -710,7 +1088,7 @@ export function DashboardShell({
                                 />
                                 <button
                                   type="submit"
-                                  className="rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm"
+                                  className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
                                 >
                                   Save ad account
                                 </button>
@@ -788,7 +1166,7 @@ export function DashboardShell({
                                 </div>
                                 <button
                                   type="submit"
-                                  className="w-full rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm lg:w-auto"
+                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
                                 >
                                   Save Microsoft Ads IDs
                                 </button>
@@ -907,7 +1285,7 @@ export function DashboardShell({
                                 </div>
                                 <button
                                   type="submit"
-                                  className="w-full rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm lg:w-auto"
+                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
                                 >
                                   Save Merchant Center IDs
                                 </button>
@@ -916,7 +1294,7 @@ export function DashboardShell({
 
                             {integration.platformKey === "google_analytics" &&
                             integration.metadata?.propertySummaries?.length ? (
-                              <p className="mt-3 text-xs uppercase tracking-[0.18em] text-[color:var(--muted)]">
+                              <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">
                                 {integration.metadata.propertySummaries.length} accessible GA4
                                 properties detected
                               </p>
@@ -927,15 +1305,15 @@ export function DashboardShell({
                     </div>
 
                     {connectedIntegrations.length === 0 ? (
-                      <p className="mt-3 text-sm text-amber-700">
+                      <p className="mt-3 text-sm text-amber-200">
                         Configure at least one integration until it reaches live-ready status before running a client-facing audit.
                       </p>
                     ) : null}
 
-                    <div className="mt-5 rounded-[1.25rem] border border-[color:var(--line)] bg-white p-4">
+                    <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4">
                       <div className="flex items-center justify-between">
-                        <h4 className="font-semibold">Locations</h4>
-                        <span className="text-sm text-[color:var(--muted)]">
+                        <h4 className="font-semibold text-white">Locations</h4>
+                        <span className="text-sm text-slate-400">
                           {client.locations.length} synced
                         </span>
                       </div>
@@ -946,10 +1324,10 @@ export function DashboardShell({
                           client.locations.map((location) => (
                             <div
                               key={location.id}
-                              className="rounded-[1rem] border border-[color:var(--line)] bg-[color:var(--shell)] p-3 text-sm"
+                              className="rounded-[1rem] border border-white/10 bg-[#182230] p-3 text-sm"
                             >
-                              <p className="font-medium">{location.label}</p>
-                              <p className="text-[color:var(--muted)]">
+                              <p className="font-medium text-white">{location.label}</p>
+                              <p className="text-slate-400">
                                 {location.landingPageUrl ?? "No landing page"}
                               </p>
                             </div>
@@ -965,14 +1343,14 @@ export function DashboardShell({
                         client.audits.map((audit) => (
                           <article
                             key={audit.id}
-                            className="rounded-[1.25rem] border border-[color:var(--line)] bg-white p-4"
+                            className="rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4"
                           >
                             <div className="flex items-center justify-between gap-3">
                               <div>
-                                <p className="text-xs uppercase tracking-[0.25em] text-[color:var(--muted)]">
+                                <p className="text-xs uppercase tracking-[0.25em] text-slate-500">
                                   Audit {audit.id.slice(-6)}
                                 </p>
-                                <p className="mt-2 text-sm text-[color:var(--muted)]">
+                                <p className="mt-2 text-sm text-slate-400">
                                   {new Date(audit.createdAt).toLocaleString()}
                                 </p>
                               </div>
@@ -989,17 +1367,17 @@ export function DashboardShell({
                                 {audit.status}
                               </span>
                             </div>
-                            <p className="mt-4 text-3xl font-semibold tracking-[-0.04em]">
+                            <p className="mt-4 text-3xl font-semibold tracking-[-0.04em] text-white">
                               {audit.score ?? "--"}
                               {audit.grade ? (
-                                <span className="ml-2 text-base text-[color:var(--muted)]">
+                                <span className="ml-2 text-base text-slate-400">
                                   {audit.grade}
                                 </span>
                               ) : null}
                             </p>
                             <div className="mt-4 flex flex-wrap gap-3 text-sm">
                               <a
-                                className="text-[color:var(--signal)] underline"
+                                className="text-[#f3c15b] underline"
                                 href={`/api/audits/${audit.id}`}
                                 rel="noreferrer"
                                 target="_blank"
@@ -1007,7 +1385,7 @@ export function DashboardShell({
                                 Details
                               </a>
                               <a
-                                className="text-[color:var(--signal)] underline"
+                                className="text-[#f3c15b] underline"
                                 href={`/api/audits/${audit.id}/locations`}
                                 rel="noreferrer"
                                 target="_blank"
@@ -1015,7 +1393,7 @@ export function DashboardShell({
                                 Locations
                               </a>
                               <a
-                                className="text-[color:var(--signal)] underline"
+                                className="text-[#f3c15b] underline"
                                 href={`/api/audits/${audit.id}/report.json`}
                                 rel="noreferrer"
                                 target="_blank"
@@ -1024,7 +1402,7 @@ export function DashboardShell({
                               </a>
                               {data.pdfRenderer.available ? (
                                 <a
-                                  className="text-[color:var(--signal)] underline"
+                                  className="text-[#f3c15b] underline"
                                   href={`/api/audits/${audit.id}/report.pdf`}
                                   rel="noreferrer"
                                   target="_blank"
@@ -1032,7 +1410,7 @@ export function DashboardShell({
                                   PDF
                                 </a>
                               ) : (
-                                <span className="text-[color:var(--muted)]">PDF unavailable</span>
+                                <span className="text-slate-500">PDF unavailable</span>
                               )}
                             </div>
                           </article>
@@ -1044,60 +1422,60 @@ export function DashboardShell({
               })
             )}
           </div>
+              </div>
+            </section>
+          </main>
         </div>
-
-        <aside className="grid gap-6">
-          <section className="rounded-[2rem] border border-[color:var(--line)] bg-white p-6 shadow-[0_16px_40px_rgba(20,33,61,0.08)]">
-            <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--muted)]">
-              Extension Kit
-            </p>
-            <h3 className="mt-3 text-xl font-semibold">Internal browser extension flow</h3>
-            <p className="mt-3 text-sm leading-6 text-[color:var(--muted)]">
-              Use the extension to detect the current Google, website, or platform context and jump
-              straight into the correct client audit. The dashboard remains the source of truth.
-            </p>
-            <a
-              className="mt-4 inline-block text-sm text-[color:var(--signal)] underline"
-              href="apps/extension/README.md"
-            >
-              Open extension scaffold
-            </a>
-          </section>
-
-          <section className="rounded-[2rem] border border-[color:var(--line)] bg-white p-6 shadow-[0_16px_40px_rgba(20,33,61,0.08)]">
-            <p className="text-xs uppercase tracking-[0.3em] text-[color:var(--muted)]">
-              Platforms
-            </p>
-            <div className="mt-4 grid gap-3">
-              {data.platforms.map((platform) => (
-                <article
-                  key={platform.key}
-                  className="rounded-[1.25rem] border border-[color:var(--line)] bg-[color:var(--shell)] p-4"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="font-semibold">{platform.name}</h3>
-                    <span className="rounded-full bg-white px-3 py-1 text-[10px] uppercase tracking-[0.25em] text-[color:var(--muted)]">
-                      {platform.launchStage}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-                    {platform.description}
-                  </p>
-                </article>
-              ))}
-            </div>
-          </section>
-        </aside>
-      </section>
-    </main>
+      </div>
+    </div>
   );
 }
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[1.5rem] border border-white/10 bg-white/6 p-4">
-      <p className="text-xs uppercase tracking-[0.28em] text-[color:var(--mist)]">{label}</p>
-      <p className="mt-3 text-3xl font-semibold tracking-[-0.04em]">{value}</p>
+    <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.05] p-4 backdrop-blur">
+      <p className="text-xs uppercase tracking-[0.28em] text-slate-400">{label}</p>
+      <p className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-white">{value}</p>
+    </div>
+  );
+}
+
+function FastNavigationCard({
+  clients,
+}: {
+  clients: DashboardData["clients"];
+}) {
+  return (
+    <div className="rounded-[1.5rem] border border-[#8f7a2f] bg-[linear-gradient(135deg,rgba(243,193,91,0.12)_0%,rgba(255,255,255,0.04)_100%)] p-4">
+      <p className="text-xs uppercase tracking-[0.28em] text-[#f3d78f]">Fast navigation tool</p>
+      <p className="mt-3 text-sm text-slate-300">
+        Jump straight to the client workspace and open the client block you need.
+      </p>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <a
+          href="#workspace"
+          className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-white transition hover:bg-white/[0.08]"
+        >
+          Client workspace
+        </a>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {clients.length === 0 ? (
+          <span className="rounded-full border border-dashed border-white/12 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-400">
+            No clients yet
+          </span>
+        ) : (
+          clients.map((client) => (
+            <a
+              key={client.id}
+              href={`#client-${client.id}`}
+              className="rounded-full border border-white/10 bg-[#111925] px-3 py-2 text-xs uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/[0.08]"
+            >
+              {client.name}
+            </a>
+          ))
+        )}
+      </div>
     </div>
   );
 }
@@ -1115,7 +1493,7 @@ function FieldWithHelp({
 }) {
   return (
     <label className="grid gap-2">
-      <span className="flex items-center gap-2 text-sm font-medium text-[color:var(--ink)]">
+      <span className="flex items-center gap-2 text-sm font-medium text-slate-100">
         {label}
         <HelpPopover title={helpTitle}>{helpBody}</HelpPopover>
       </span>
@@ -1127,11 +1505,11 @@ function FieldWithHelp({
 function HelpPopover({ title, children }: { title: string; children: ReactNode }) {
   return (
     <details className="group relative inline-block">
-      <summary className="flex h-5 w-5 cursor-pointer list-none items-center justify-center rounded-full border border-[color:var(--line)] bg-[color:var(--shell)] text-[11px] font-semibold text-[color:var(--signal)] transition hover:border-[color:var(--signal)]">
+      <summary className="flex h-5 w-5 cursor-pointer list-none items-center justify-center rounded-full border border-white/12 bg-white/[0.05] text-[11px] font-semibold text-[#f3c15b] transition hover:border-[#f3c15b]">
         ?
       </summary>
-      <div className="absolute left-0 top-full z-20 mt-3 w-[min(22rem,calc(100vw-4rem))] rounded-[1.25rem] border border-[color:var(--line)] bg-white p-4 text-sm font-normal leading-6 text-[color:var(--muted)] shadow-[0_20px_45px_rgba(20,33,61,0.14)]">
-        <p className="font-semibold text-[color:var(--ink)]">{title}</p>
+      <div className="absolute left-0 top-full z-20 mt-3 w-[min(22rem,calc(100vw-4rem))] rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4 text-sm font-normal leading-6 text-slate-400 shadow-[0_20px_45px_rgba(0,0,0,0.35)]">
+        <p className="font-semibold text-white">{title}</p>
         <div className="mt-2 space-y-2">{children}</div>
       </div>
     </details>
@@ -1142,7 +1520,7 @@ function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className="rounded-2xl border border-[color:var(--line)] bg-[color:var(--shell)] px-4 py-3 text-sm outline-none"
+      className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
     />
   );
 }
@@ -1151,7 +1529,7 @@ function EmptyState({ text, compact = false }: { text: string; compact?: boolean
   return (
     <div
       className={clsx(
-        "rounded-[1.25rem] border border-dashed border-[color:var(--line)] bg-white text-[color:var(--muted)]",
+        "rounded-[1.25rem] border border-dashed border-white/12 bg-white/[0.03] text-slate-400",
         compact ? "p-4 text-sm" : "p-6 text-sm",
       )}
     >
@@ -1162,7 +1540,7 @@ function EmptyState({ text, compact = false }: { text: string; compact?: boolean
 
 function EmptyPill({ text }: { text: string }) {
   return (
-    <span className="rounded-full border border-dashed border-[color:var(--line)] px-3 py-2 text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
+    <span className="rounded-full border border-dashed border-white/12 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-400">
       {text}
     </span>
   );
@@ -1175,7 +1553,7 @@ function StatusBadge({ status }: { status: IntegrationConnectionStatus }) {
         "rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em]",
         status === "ready" && "bg-emerald-100 text-emerald-700",
         status === "attention" && "bg-amber-100 text-amber-800",
-        status === "demo" && "bg-slate-100 text-slate-700",
+        status === "demo" && "bg-slate-200 text-slate-700",
       )}
     >
       {status === "ready" ? "live-ready" : status}
@@ -1189,8 +1567,8 @@ function StatusChip({ label, ready }: { label: string; ready: boolean }) {
       className={clsx(
         "rounded-full border px-3 py-2 text-[10px] uppercase tracking-[0.18em]",
         ready
-          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-          : "border-[color:var(--line)] bg-[color:var(--shell)] text-[color:var(--muted)]",
+          ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
+          : "border-white/10 bg-white/[0.04] text-slate-400",
       )}
     >
       {label}

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { AuditPreflightError, createAuditForClient } from "@/lib/audit-engine";
-import { getAuthSession } from "@/lib/auth-session-server";
+import { loadClientForViewer, requireRouteViewer } from "@/lib/route-auth";
 
 const auditScopeSchema = z
   .object({
@@ -21,11 +21,12 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  if (!(await getAuthSession())) {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
-  }
+  const { viewer, response } = await requireRouteViewer();
+  if (!viewer) return response;
   try {
     const { id } = await context.params;
+    const { response: clientResponse } = await loadClientForViewer(viewer, id);
+    if (clientResponse) return clientResponse;
     const raw = request.headers.get("content-length") === "0" ? undefined : await request.json().catch(() => undefined);
     const scope = auditScopeSchema.parse(raw);
     const audit = await createAuditForClient(id, scope);

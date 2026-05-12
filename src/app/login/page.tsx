@@ -16,12 +16,12 @@ function resolveLocale(lang?: string) {
 
 const copy = {
   en: {
-    tag: "Operator access",
+    tag: "Workspace access",
     panelTag: "Login",
-    panelTitle: "Presentation access",
-    title: "Google login is back for the live dashboard.",
+    panelTitle: "Shared SaaS access",
+    title: "Google login now handles both platform admins and invited customers.",
     body:
-      "Use your Google account to enter the local presentation environment and keep the client audit workspace behind a simple operator gate.",
+      "Use your Google account to enter the main workspace. Platform admins can bootstrap the product, and invited customer users can access only their own account.",
     ctaTop: "Continue with Google",
     ctaBottom: "Sign in with Google",
     note: "The same callback also powers the Google platform connections inside each client workspace.",
@@ -30,19 +30,19 @@ const copy = {
     statusLabel: "Google OAuth",
     statusReady: "Ready",
     statusNeedsSetup: "Needs setup",
-    configured: "Google OAuth and the operator allowlist are configured for the presentation flow.",
+    configured: "Google OAuth is configured. Bootstrap admin allowlists remain optional but recommended for the first platform admin login.",
     missing:
-      "Login is disabled until the required Google OAuth and operator access settings are added to .env.local.",
+      "Login is disabled until the required Google OAuth settings are added to .env.local.",
     oauthSetup: "Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.",
-    allowlistSetup: "Add AUDIT_OPERATOR_EMAILS or AUDIT_OPERATOR_DOMAINS.",
+    allowlistSetup: "Optionally add AUDIT_OPERATOR_EMAILS or AUDIT_OPERATOR_DOMAINS for bootstrap admin access.",
   },
   pt: {
-    tag: "Acesso do operador",
+    tag: "Acesso ao workspace",
     panelTag: "Acesso",
-    panelTitle: "Acesso da apresentação",
-    title: "O login com Google voltou para o dashboard ao vivo.",
+    panelTitle: "Acesso SaaS compartilhado",
+    title: "O login com Google agora atende admins da plataforma e clientes convidados.",
     body:
-      "Use a sua conta Google para entrar no ambiente local da apresentação e manter o workspace de auditoria atrás de uma porta simples para operador.",
+      "Use a sua conta Google para entrar no workspace principal. Os admins podem iniciar a plataforma, e os clientes convidados veem apenas a própria conta.",
     ctaTop: "Entrar com Google",
     ctaBottom: "Fazer login com Google",
     note: "O mesmo callback também alimenta as conexões das plataformas Google dentro de cada workspace de cliente.",
@@ -51,11 +51,11 @@ const copy = {
     statusLabel: "Google OAuth",
     statusReady: "Pronto",
     statusNeedsSetup: "Falta configurar",
-    configured: "O Google OAuth e a allowlist de operadores estão configurados para o fluxo da apresentação.",
+    configured: "O Google OAuth está configurado. A allowlist continua opcional, mas é recomendada para o primeiro login de admin da plataforma.",
     missing:
-      "O login fica desativado até que as configurações obrigatórias de Google OAuth e acesso do operador sejam adicionadas ao .env.local.",
+      "O login fica desativado até que as configurações obrigatórias de Google OAuth sejam adicionadas ao .env.local.",
     oauthSetup: "Adicione GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET.",
-    allowlistSetup: "Adicione AUDIT_OPERATOR_EMAILS ou AUDIT_OPERATOR_DOMAINS.",
+    allowlistSetup: "Opcionalmente adicione AUDIT_OPERATOR_EMAILS ou AUDIT_OPERATOR_DOMAINS para acesso inicial de admin.",
   },
 } as const;
 
@@ -73,7 +73,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const googleOAuthConfigured = Boolean(
     process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
   );
-  const googleConfigured = googleOAuthConfigured && operatorAccess.configured;
+  const googleConfigured = googleOAuthConfigured;
   const setupSteps = [
     !googleOAuthConfigured ? content.oauthSetup : null,
     !operatorAccess.configured ? content.allowlistSetup : null,

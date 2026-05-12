@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { buildGoogleLoginUrl } from "@/lib/google-auth";
 import { GOOGLE_LOGIN_COOKIE, getLoginCookieOptions } from "@/lib/auth-session";
-import { isOperatorAccessConfigured } from "@/lib/operator-access";
 
 function resolveLocale(value: string | null) {
   return value === "pt" ? "pt" : "en";
@@ -12,11 +11,6 @@ export async function GET(request: Request) {
   const locale = resolveLocale(url.searchParams.get("lang"));
 
   try {
-    if (!isOperatorAccessConfigured()) {
-      throw new Error(
-        "Configure AUDIT_OPERATOR_EMAILS or AUDIT_OPERATOR_DOMAINS before starting Google login.",
-      );
-    }
     const result = await buildGoogleLoginUrl(locale);
     const response = NextResponse.redirect(result.authUrl, 303);
     response.cookies.set(

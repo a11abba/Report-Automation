@@ -9,7 +9,10 @@ export async function logEvent(input: {
   detail?: Record<string, unknown> | null;
 }) {
   const store = await getStore();
+  const audit = input.auditId ? await store.getAudit(input.auditId) : null;
+  const fallbackAccount = await store.ensurePlatformAccount();
   return store.appendAuditEvent({
+    accountId: audit?.accountId ?? fallbackAccount.id,
     auditId: input.auditId ?? null,
     level: input.level ?? "info",
     code: input.code,

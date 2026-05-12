@@ -484,6 +484,7 @@ export function buildReport(
   const strengths = localizedFindings.filter((finding) => finding.status === "passing").slice(0, 3).map((finding) => finding.summary);
 
   return {
+    accountId: client.accountId,
     auditId,
     clientId: snapshot.clientId,
     clientName: snapshot.clientName,

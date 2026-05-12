@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createClientRecord } from "@/lib/audit-engine";
+import { canManagePlatform } from "@/lib/auth-access";
 import { reportFocuses, reportLanguages } from "@/lib/audit/types";
-import { getAuthSession } from "@/lib/auth-session-server";
 import { assertSafeAuditUrl } from "@/lib/audit-url";
 import { getStore } from "@/lib/storage";
+import { requireRouteViewer } from "@/lib/route-auth";
 
 const createClientSchema = z.object({
+  accountId: z.string().optional(),
   name: z.string().min(2),
   industry: z.string().min(2),
   industryLabelPt: z.string().min(2).nullable().optional(),
@@ -17,24 +19,27 @@ const createClientSchema = z.object({
 });
 
 export async function GET() {
-  if (!(await getAuthSession())) {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
-  }
+  const { viewer, response } = await requireRouteViewer();
+  if (!viewer) return response;
   const store = await getStore();
-  const clients = await store.listClients();
+  const clients = (await store.listClients()).filter(
+    (client) => viewer.role === "platform_admin" || client.accountId === viewer.accountId,
+  );
   return NextResponse.json({ clients });
 }
 
 export async function POST(request: Request) {
-  if (!(await getAuthSession())) {
-    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+  const { viewer, response } = await requireRouteViewer();
+  if (!viewer) return response;
+  if (!canManagePlatform(viewer)) {
+    return NextResponse.json({ error: "Forbidden." }, { status: 403 });
   }
   try {
     const body = createClientSchema.parse(await request.json());
     const primaryDomain = body.primaryDomain
       ? await assertSafeAuditUrl(body.primaryDomain)
       : null;
-    const client = await createClientRecord({
+    const client = await createClientRecord(body.accountId ?? viewer.accountId, {
       name: body.name,
       industry: body.industry,
       industryLabelPt: body.industryLabelPt ?? null,

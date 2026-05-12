@@ -8,8 +8,9 @@ The project now supports:
 
 - Next.js dashboard and API routes
 - Electron desktop shell
-- Local SQLite app database
-- Encrypted local credential vault
+- Postgres-first SaaS persistence with local SQLite fallback
+- Account, membership, and invited-user access control
+- Encrypted credential storage inside the application data store
 - Google OAuth flow with signed state and PKCE
 - Report generation to JSON and PDF
 - Report localization for `pt-BR` and `pt-PT`
@@ -37,5 +38,5 @@ To enable PDF export, run:
 
 Copy [`.env.example`](./.env.example) to `.env.local` and fill in the required values when enabling real Google or PageSpeed connections.
 
-Operator login now requires an explicit allowlist through `AUDIT_OPERATOR_EMAILS` and/or `AUDIT_OPERATOR_DOMAINS`.
+Customer access is invite-based. `AUDIT_OPERATOR_EMAILS` and/or `AUDIT_OPERATOR_DOMAINS` remain available as the bootstrap allowlist for the first platform admin login.
 Website target URLs are restricted to public `http` and `https` hosts.

@@ -3,9 +3,10 @@ import { listDashboardData } from "@/lib/audit-engine";
 import { getAuthSession } from "@/lib/auth-session-server";
 
 export async function GET() {
-  if (!(await getAuthSession())) {
+  const viewer = await getAuthSession();
+  if (!viewer) {
     return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }
-  const data = await listDashboardData();
+  const data = await listDashboardData(viewer);
   return NextResponse.json(data);
 }
