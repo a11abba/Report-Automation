@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
-const legacySecretFile = path.join(process.cwd(), "data", "runtime-secret.txt");
+const legacySecretFile = path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "runtime-secret.txt");
 const secretDir = path.join(os.homedir(), ".audit-platform");
 const secretFile = path.join(secretDir, "runtime-secret.txt");
 

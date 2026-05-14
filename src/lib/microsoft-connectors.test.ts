@@ -19,6 +19,9 @@ const client: ClientRecord = {
   primaryDomain: "https://naturallifecollections.example",
   reportLanguage: "pt-BR",
   reportFocus: "paid_media",
+  monthlyReportEnabled: false,
+  monthlyReportDay: null,
+  monthlyReportAutoGenerate: true,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };

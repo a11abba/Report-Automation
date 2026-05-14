@@ -12,11 +12,9 @@ interface VaultShape {
   secrets: Record<string, string>;
 }
 
-const vaultFile = getAuditDataFile("credential-vault.json");
-
 async function readVault() {
   try {
-    const raw = await readFile(vaultFile, "utf-8");
+    const raw = await readFile(getAuditDataFile("credential-vault.json"), "utf-8");
     const parsed = JSON.parse(raw) as Partial<VaultShape>;
     return {
       secrets: parsed.secrets ?? {},

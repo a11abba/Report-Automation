@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { assertSafeAuditUrl, normalizeAuditUrl } from "./audit-url";
 import {
+  canViewAccountBilling,
+  normalizeAppRole,
+  pickCustomerLoginMembership,
+} from "./role-access";
+import {
   getOperatorAccessSetupSummary,
   hasOperatorAccess,
   isAuthorizedSession,
@@ -51,5 +56,63 @@ describe("audit URL validation", () => {
     await expect(assertSafeAuditUrl("https://localhost:3000")).rejects.toThrow(
       "public hostname",
     );
+  });
+});
+
+describe("role enforcement", () => {
+  it("maps the legacy customer role to client admin access", () => {
+    expect(normalizeAppRole("account_user")).toBe("account_admin");
+    expect(
+      canViewAccountBilling(
+        {
+          accountId: "acc_1",
+          role: "account_user",
+        },
+        "acc_1",
+      ),
+    ).toBe(true);
+  });
+
+  it("prevents client operators from seeing billing-only account details", () => {
+    expect(
+      canViewAccountBilling(
+        {
+          accountId: "acc_1",
+          role: "account_operator",
+        },
+        "acc_1",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects ambiguous customer logins across multiple accounts", () => {
+    expect(() =>
+      pickCustomerLoginMembership([
+        {
+          id: "mem_1",
+          accountId: "acc_1",
+          userId: null,
+          invitedEmail: "user@example.com",
+          role: "account_admin",
+          status: "invited",
+          invitedByUserId: null,
+          activatedAt: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "mem_2",
+          accountId: "acc_2",
+          userId: null,
+          invitedEmail: "user@example.com",
+          role: "account_operator",
+          status: "invited",
+          invitedByUserId: null,
+          activatedAt: null,
+          createdAt: "2026-01-02T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z",
+        },
+      ]),
+    ).toThrow("multiple customer workspaces");
   });
 });

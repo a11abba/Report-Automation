@@ -131,12 +131,30 @@ export function normalizeMetaAdAccountId(value: string | null | undefined) {
   return null;
 }
 
-function buildInsightsUrl(adAccountId: string, fields: string, extraParams?: Record<string, string>) {
+function buildInsightsUrl(
+  adAccountId: string,
+  fields: string,
+  extraParams?: Record<string, string>,
+  dateRange?: {
+    startDate: string;
+    endDate: string;
+  },
+) {
   const url = new URL(`${META_GRAPH_API_BASE}/${adAccountId}/insights`);
   url.searchParams.set("fields", fields);
-  url.searchParams.set("date_preset", "last_30d");
   url.searchParams.set("limit", "10");
   url.searchParams.set("use_unified_attribution_setting", "true");
+  if (dateRange) {
+    url.searchParams.set(
+      "time_range",
+      JSON.stringify({
+        since: dateRange.startDate,
+        until: dateRange.endDate,
+      }),
+    );
+  } else {
+    url.searchParams.set("date_preset", "last_30d");
+  }
   for (const [key, value] of Object.entries(extraParams ?? {})) {
     url.searchParams.set(key, value);
   }
@@ -203,7 +221,14 @@ function mapCampaignRow(row: MetaAdsInsightRow): PaidMediaCampaignSnapshot | nul
   };
 }
 
-export async function fetchMetaAdsSnapshot(accessToken: string, adAccountId: string): Promise<PaidMediaSection> {
+export async function fetchMetaAdsSnapshot(
+  accessToken: string,
+  adAccountId: string,
+  dateRange?: {
+    startDate: string;
+    endDate: string;
+  },
+): Promise<PaidMediaSection> {
   const normalized = normalizeMetaAdAccountId(adAccountId);
   if (!normalized) {
     throw new MetaAdsApiError("Enter a valid Meta ad account ID before requesting live data.", 400);
@@ -227,14 +252,14 @@ export async function fetchMetaAdsSnapshot(accessToken: string, adAccountId: str
 
   const [summaryPayload, campaignsPayload] = await Promise.all([
     fetchMetaJson<MetaAdsInsightsResponse>(
-      buildInsightsUrl(normalized, fields, { level: "account", limit: "1" }),
+      buildInsightsUrl(normalized, fields, { level: "account", limit: "1" }, dateRange),
       accessToken,
     ),
     fetchMetaJson<MetaAdsInsightsResponse>(
       buildInsightsUrl(normalized, fields, {
         level: "campaign",
         sort: "spend_descending",
-      }),
+      }, dateRange),
       accessToken,
     ),
   ]);

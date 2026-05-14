@@ -235,14 +235,14 @@ export class MetaAdsConnector implements PlatformConnector {
     }
   }
 
-  async fetchSnapshot({ client, integration }: ConnectorContext): Promise<NormalizedBusinessSnapshot> {
+  async fetchSnapshot({ client, integration, dateRange }: ConnectorContext): Promise<NormalizedBusinessSnapshot> {
     const accessToken = integration.credentials.apiKey || integration.credentials.accessToken;
     const adAccountId = normalizeMetaAdAccountId(integration.settings.adAccountId);
     if (!accessToken || !adAccountId) {
       return buildMetaAdsDemoSnapshot(client, integration);
     }
 
-    const paidMedia = await fetchMetaAdsSnapshot(accessToken, adAccountId);
+    const paidMedia = await fetchMetaAdsSnapshot(accessToken, adAccountId, dateRange);
     const snapshot = baseSnapshot(client, this.key, this.platformType(), this.capabilities());
     snapshot.sourceEvidence.push(
       nowEvidence(this.key, this.platformType(), "Meta ad account", "paidMedia.adAccountId", paidMedia.adAccountId),

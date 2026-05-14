@@ -9,19 +9,38 @@ import {
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
+import {
+  ReportPeriodPanel,
+  type ReportPeriodView,
+} from "@/components/report-period-panel";
 import { deleteJson, getJson, patchJson, postJson } from "@/lib/api-client";
 import type { AuthSession } from "@/lib/auth-session";
 import { getReportFocusLabel } from "@/lib/report-focus";
 import type {
+  AppRole,
   AuditRecord,
   ConnectorHealthCheckResult,
   ConnectorMetadataResult,
   ConnectorValidationResult,
   IntegrationConnectionStatus,
+  IntegrationPropertySummary,
   LocationRecord,
   PlatformDefinition,
   RulePackMetadata,
 } from "@/lib/audit/types";
+
+function getRoleLabel(role: AppRole): string {
+  switch (role) {
+    case "platform_admin":
+      return "Platform admin";
+    case "account_admin":
+      return "Client admin";
+    case "account_operator":
+      return "Client operator";
+    case "account_user":
+      return "Client admin";
+  }
+}
 
 interface DashboardData {
   accounts: Array<{
@@ -40,7 +59,7 @@ interface DashboardData {
       accountId: string;
       userId: string | null;
       invitedEmail: string;
-      role: "platform_admin" | "account_user";
+      role: "platform_admin" | "account_admin" | "account_operator";
       status: "invited" | "active" | "revoked";
       invitedByUserId: string | null;
       activatedAt: string | null;
@@ -54,8 +73,8 @@ interface DashboardData {
     id: string;
     name: string;
     slug: string;
-    subscriptionStatus: "trialing" | "active" | "past_due" | "paused" | "canceled";
-    serviceTier: string;
+    subscriptionStatus: "trialing" | "active" | "past_due" | "paused" | "canceled" | null;
+    serviceTier: string | null;
     billingCycleAnchor: string | null;
     trialEndsAt: string | null;
     createdAt: string;
@@ -76,6 +95,9 @@ interface DashboardData {
     primaryDomain: string | null;
     reportLanguage: "pt-BR" | "pt-PT" | "en";
     reportFocus: "full_funnel" | "lifecycle_marketing" | "seo_local" | "paid_media";
+    monthlyReportEnabled: boolean;
+    monthlyReportDay: number | null;
+    monthlyReportAutoGenerate: boolean;
     integrations: Array<{
       id: string;
       platformKey: string;
@@ -92,6 +114,8 @@ interface DashboardData {
         targetUrl?: string | null;
         ga4PropertyId?: string | null;
         adAccountId?: string | null;
+        googleAdsCustomerId?: string | null;
+        googleAdsLoginCustomerId?: string | null;
         propertyId?: string | null;
         businessAccountId?: string | null;
         businessProfileId?: string | null;
@@ -103,6 +127,7 @@ interface DashboardData {
     }>;
     locations: LocationRecord[];
     audits: AuditRecord[];
+    reportPeriods: ReportPeriodView[];
   }>;
   recentAudits: AuditRecord[];
 }
@@ -228,6 +253,7 @@ export function DashboardShell({
     data.pdfRenderer.available ? "PDF export ready" : "PDF export pending",
   ];
   const isPlatformAdmin = viewer.role === "platform_admin";
+  const canViewBilling = viewer.role === "platform_admin" || viewer.role === "account_admin";
   const accountOptions = isPlatformAdmin ? data.accounts : data.currentAccount ? [data.currentAccount] : [];
 
   return (
@@ -248,20 +274,20 @@ export function DashboardShell({
 
           <nav className="mt-10 grid gap-3">
             <a
-              href="#overview"
+              href="#overview-title"
               className="flex items-center justify-between rounded-[1.25rem] border border-[#8f7a2f] bg-[#ffffff10] px-4 py-4 text-sm font-medium text-[#f4d98c] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
             >
               <span>Overview</span>
               <span className="text-xs uppercase tracking-[0.24em] text-[#d8be6c]">Live</span>
             </a>
             <a
-              href="#workspace"
+              href="#workspace-title"
               className="rounded-[1.25rem] border border-white/8 bg-white/[0.03] px-4 py-4 text-sm font-medium text-slate-300 transition hover:border-white/16 hover:bg-white/[0.05]"
             >
               Workspace
             </a>
             <a
-              href="#new-client"
+              href="#new-client-title"
               className="rounded-[1.25rem] border border-white/8 bg-white/[0.03] px-4 py-4 text-sm font-medium text-slate-300 transition hover:border-white/16 hover:bg-white/[0.05]"
             >
               New client
@@ -296,7 +322,7 @@ export function DashboardShell({
                 Google session
               </span>
               <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-slate-400">
-                {viewer.role === "platform_admin" ? "Platform admin" : "Account user"}
+                {getRoleLabel(viewer.role)}
               </span>
               {data.currentAccount ? (
                 <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.24em] text-slate-400">
@@ -387,11 +413,27 @@ export function DashboardShell({
                   <p className="text-[11px] uppercase tracking-[0.32em] text-slate-500">
                     Prospecting-style dashboard
                   </p>
-                  <h1 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">
+                  <h1
+                    id="overview-title"
+                    className="mt-2 scroll-mt-32 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl"
+                  >
                     Guided client audit operations
                   </h1>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200 transition hover:bg-white/[0.08] disabled:opacity-50"
+                    disabled={pending}
+                    onClick={() =>
+                      runTask(
+                        () => postJson("/api/reporting/monthly/run", {}),
+                        "Monthly scheduler executed for the visible clients.",
+                      )
+                    }
+                  >
+                    Run monthly scheduler
+                  </button>
                   {statusPills.map((pill) => (
                     <span
                       key={pill}
@@ -431,8 +473,10 @@ export function DashboardShell({
                 <div className="mt-7 inline-flex rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-xs uppercase tracking-[0.22em] text-slate-300">
                   Google login active and client workspace live
                 </div>
-                <div className="mt-8 grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
+                <div className="mt-8">
                   <FastNavigationCard clients={data.clients} />
+                </div>
+                <div className="mt-4 grid gap-4 sm:grid-cols-3">
                   <StatCard label="Audits" value={String(data.recentAudits.length)} />
                   <StatCard label="Platforms" value={String(data.platforms.length)} />
                   <StatCard label="Rule Packs" value={String(data.rulePacks.length)} />
@@ -448,7 +492,10 @@ export function DashboardShell({
                     <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
                       {isPlatformAdmin ? "New client" : "Account access"}
                     </p>
-                    <h2 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-white">
+                    <h2
+                      id="new-client-title"
+                      className="mt-3 scroll-mt-32 text-2xl font-semibold tracking-[-0.04em] text-white"
+                    >
                       {isPlatformAdmin ? "Start a new audit workspace" : "Use your shared customer workspace"}
                     </h2>
                   </div>
@@ -551,11 +598,15 @@ export function DashboardShell({
                     <p className="text-sm text-slate-300">
                       Account: <span className="font-semibold text-white">{data.currentAccount?.name ?? "Assigned workspace"}</span>
                     </p>
-                    <p className="mt-2 text-sm text-slate-400">
-                      Plan: {data.currentAccount?.serviceTier ?? "starter"} · Status: {data.currentAccount?.subscriptionStatus ?? "active"}
-                    </p>
+                    {canViewBilling ? (
+                      <p className="mt-2 text-sm text-slate-400">
+                        Plan: {data.currentAccount?.serviceTier ?? "starter"} · Status: {data.currentAccount?.subscriptionStatus ?? "active"}
+                      </p>
+                    ) : null}
                     <p className="mt-3 text-sm leading-6 text-slate-400">
-                      Client creation and subscription changes stay with the platform admin. Your team can use the workspace below to connect APIs and generate reports.
+                      {canViewBilling
+                        ? "Client creation stays with the platform admin. Your team can use the workspace below to connect APIs, manage operations, and generate reports."
+                        : "Client creation and billing changes stay with the platform admin or your client admin. Your team can use the workspace below to connect APIs and generate reports."}
                     </p>
                   </div>
                 )}
@@ -656,7 +707,7 @@ export function DashboardShell({
                                   key={member.id}
                                   className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300"
                                 >
-                                  {member.invitedEmail} · {member.role} · {member.status}
+                                  {member.invitedEmail} · {getRoleLabel(member.role)} · {member.status}
                                 </span>
                               ))
                             )}
@@ -667,7 +718,7 @@ export function DashboardShell({
                               event.preventDefault();
                               const formData = new FormData(event.currentTarget);
                               const email = String(formData.get("email") ?? "");
-                              const role = String(formData.get("role") ?? "account_user");
+                              const role = String(formData.get("role") ?? "account_operator");
                               runTask(
                                 () =>
                                   postJson(`/api/accounts/${account.id}/members`, {
@@ -683,10 +734,10 @@ export function DashboardShell({
                             <select
                               name="role"
                               className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
-                              defaultValue="account_user"
+                              defaultValue="account_operator"
                             >
-                              <option value="account_user">Account user</option>
-                              <option value="platform_admin">Platform admin</option>
+                              <option value="account_operator">Client operator</option>
+                              <option value="account_admin">Client admin</option>
                             </select>
                             <button
                               type="submit"
@@ -705,7 +756,10 @@ export function DashboardShell({
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
                   Client Workspace
                 </p>
-                <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">
+                <h2
+                  id="workspace-title"
+                  className="mt-2 scroll-mt-32 text-2xl font-semibold tracking-[-0.03em] text-white"
+                >
                   Brand summary, integrations, locations, and report runs
                 </h2>
 
@@ -720,13 +774,17 @@ export function DashboardShell({
 
                 return (
                   <article
-                    id={`client-${client.id}`}
                     key={client.id}
                     className="rounded-[1.75rem] border border-white/10 bg-[#182230] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-4">
                       <div>
-                        <h3 className="text-xl font-semibold text-white">{client.name}</h3>
+                        <h3
+                          id={`client-${client.id}`}
+                          className="scroll-mt-32 text-xl font-semibold text-white"
+                        >
+                          {client.name}
+                        </h3>
                         <p className="mt-1 text-sm text-slate-400">
                           {client.industry} {"\u00b7"} {client.operatingModel.replace("_", " ")}
                         </p>
@@ -739,6 +797,14 @@ export function DashboardShell({
                         </p>
                         <p className="mt-1 text-sm text-slate-400">
                           Report focus: {getReportFocusLabel("en", client.reportFocus)}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-400">
+                          Monthly automation:{" "}
+                          {client.monthlyReportEnabled
+                            ? client.monthlyReportDay == null
+                              ? "enabled, waiting for a day of month"
+                              : `day ${client.monthlyReportDay} · ${client.monthlyReportAutoGenerate ? "auto-generate" : "draft only"}`
+                            : "disabled"}
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -874,6 +940,68 @@ export function DashboardShell({
                       </button>
                     </form>
 
+                    <div className="mt-3 rounded-[1.25rem] border border-white/10 bg-[#111925] p-4">
+                      <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                        Monthly automation
+                      </p>
+                      <form
+                        className="mt-3 grid gap-3 lg:grid-cols-[0.9fr_0.8fr_0.9fr_auto]"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          const formData = new FormData(event.currentTarget);
+                          const monthlyReportEnabled =
+                            String(formData.get("monthlyReportEnabled") ?? "false") === "true";
+                          const monthlyReportAutoGenerate =
+                            String(formData.get("monthlyReportAutoGenerate") ?? "true") === "true";
+                          const monthlyReportDayRaw = String(
+                            formData.get("monthlyReportDay") ?? "",
+                          ).trim();
+                          runTask(
+                            () =>
+                              patchJson(`/api/clients/${client.id}`, {
+                                monthlyReportEnabled,
+                                monthlyReportDay: monthlyReportDayRaw
+                                  ? Number(monthlyReportDayRaw)
+                                  : null,
+                                monthlyReportAutoGenerate,
+                              }),
+                            `Monthly automation updated for ${client.name}.`,
+                          );
+                        }}
+                      >
+                        <select
+                          name="monthlyReportEnabled"
+                          className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                          defaultValue={client.monthlyReportEnabled ? "true" : "false"}
+                        >
+                          <option value="false">Automation disabled</option>
+                          <option value="true">Automation enabled</option>
+                        </select>
+                        <Input
+                          name="monthlyReportDay"
+                          type="number"
+                          min={1}
+                          max={31}
+                          placeholder="Day of month"
+                          defaultValue={client.monthlyReportDay ?? ""}
+                        />
+                        <select
+                          name="monthlyReportAutoGenerate"
+                          className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                          defaultValue={client.monthlyReportAutoGenerate ? "true" : "false"}
+                        >
+                          <option value="true">Auto-generate report</option>
+                          <option value="false">Create draft only</option>
+                        </select>
+                        <button
+                          type="submit"
+                          className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 transition hover:bg-white/[0.08]"
+                        >
+                          Save monthly automation
+                        </button>
+                      </form>
+                    </div>
+
                     <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto]">
                       <select
                         form={`integration-${client.id}`}
@@ -964,6 +1092,12 @@ export function DashboardShell({
                       </button>
                       <button
                         className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-200"
+                        onClick={() => launchGoogleOAuth(client.id, "google_ads")}
+                      >
+                        Connect Google Ads
+                      </button>
+                      <button
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-200"
                         onClick={() => launchMicrosoftOAuth(client.id, "microsoft_ads")}
                       >
                         Connect Microsoft Ads
@@ -1027,6 +1161,156 @@ export function DashboardShell({
                               />
                             </div>
 
+                            {integration.platformKey === "google_search_console" ? (
+                              <form
+                                className="mt-4 grid gap-4"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  const formData = new FormData(event.currentTarget);
+                                  const propertyId = String(formData.get("propertyId") ?? "").trim();
+                                  runTask(
+                                    () =>
+                                      patchJson(
+                                        `/api/clients/${client.id}/integrations/${integration.id}`,
+                                        {
+                                          propertyId: propertyId || null,
+                                          demoMode: false,
+                                        },
+                                      ),
+                                    `Search Console property updated for ${client.name}.`,
+                                  );
+                                }}
+                              >
+                                <FieldWithHelp
+                                  label="Property"
+                                  helpTitle="Which Search Console property goes here?"
+                                  helpBody={
+                                    <>
+                                      <p>
+                                        Paste the exact Search Console property, such as <code>sc-domain:example.com</code> or <code>https://example.com/</code>.
+                                      </p>
+                                      <p>
+                                        If accessible properties were discovered, you can pick one from the browser suggestion list on this field.
+                                      </p>
+                                    </>
+                                  }
+                                >
+                                  <Input
+                                    name="propertyId"
+                                    list={`search-console-properties-${integration.id}`}
+                                    placeholder="sc-domain:example.com or https://example.com/"
+                                    defaultValue={integration.settings.propertyId ?? ""}
+                                  />
+                                </FieldWithHelp>
+                                <button
+                                  type="submit"
+                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                >
+                                  Save Search Console property
+                                </button>
+                                <datalist id={`search-console-properties-${integration.id}`}>
+                                  {integration.metadata?.propertySummaries?.map((summary) => (
+                                    <option key={summary.resourceName} value={summary.propertyId}>
+                                      {summary.displayName}
+                                    </option>
+                                  ))}
+                                </datalist>
+                              </form>
+                            ) : null}
+
+                            {integration.platformKey === "google_business_profile" ? (
+                              <form
+                                className="mt-4 grid gap-4"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  const formData = new FormData(event.currentTarget);
+                                  const businessAccountId = String(
+                                    formData.get("businessAccountId") ?? "",
+                                  ).trim();
+                                  const businessProfileId = String(
+                                    formData.get("businessProfileId") ?? "",
+                                  ).trim();
+                                  runTask(
+                                    () =>
+                                      patchJson(
+                                        `/api/clients/${client.id}/integrations/${integration.id}`,
+                                        {
+                                          businessAccountId: businessAccountId || null,
+                                          businessProfileId: businessProfileId || null,
+                                          demoMode: false,
+                                        },
+                                      ),
+                                    `Business Profile IDs updated for ${client.name}.`,
+                                  );
+                                }}
+                              >
+                                <div className="grid gap-3 lg:grid-cols-2">
+                                  <FieldWithHelp
+                                    label="Business account ID"
+                                    helpTitle="Which Business Profile account ID goes here?"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Use the account resource, such as <code>accounts/123456789</code>.
+                                        </p>
+                                        <p>
+                                          If the integration already discovered accessible accounts, you can pick one from the browser suggestion list on this field.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="businessAccountId"
+                                      list={`business-profile-accounts-${integration.id}`}
+                                      placeholder="accounts/123456789"
+                                      defaultValue={integration.settings.businessAccountId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                  <FieldWithHelp
+                                    label="Primary location ID"
+                                    helpTitle="When should I fill the location ID?"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Leave this blank to aggregate all accessible locations under the account.
+                                        </p>
+                                        <p>
+                                          Fill it with a specific resource like <code>locations/987654321</code> when the report should focus on one unit only.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="businessProfileId"
+                                      list={`business-profile-locations-${integration.id}`}
+                                      placeholder="locations/987654321 (optional)"
+                                      defaultValue={integration.settings.businessProfileId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                </div>
+                                <button
+                                  type="submit"
+                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                >
+                                  Save Business Profile IDs
+                                </button>
+                                <datalist id={`business-profile-accounts-${integration.id}`}>
+                                  {integration.metadata?.accountSummaries?.map((summary) => (
+                                    <option key={summary.resourceName} value={summary.propertyId}>
+                                      {summary.displayName}
+                                    </option>
+                                  ))}
+                                </datalist>
+                                <datalist id={`business-profile-locations-${integration.id}`}>
+                                  {integration.metadata?.locationSummaries?.map((summary) => (
+                                    <option key={summary.resourceName} value={summary.propertyId}>
+                                      {summary.displayName}
+                                    </option>
+                                  ))}
+                                </datalist>
+                              </form>
+                            ) : null}
+
                             {integration.platformKey === "google_analytics" ? (
                               <form
                                 className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]"
@@ -1061,18 +1345,106 @@ export function DashboardShell({
                               </form>
                             ) : null}
 
-                            {integration.platformKey === "meta_ads" ? (
+                            {integration.platformKey === "google_ads" ? (
                               <form
-                                className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]"
+                                className="mt-4 grid gap-4"
                                 onSubmit={(event) => {
                                   event.preventDefault();
                                   const formData = new FormData(event.currentTarget);
+                                  const googleAdsCustomerId = String(
+                                    formData.get("googleAdsCustomerId") ?? "",
+                                  ).trim();
+                                  const googleAdsLoginCustomerId = String(
+                                    formData.get("googleAdsLoginCustomerId") ?? "",
+                                  ).trim();
+                                  runTask(
+                                    () =>
+                                      patchJson(
+                                        `/api/clients/${client.id}/integrations/${integration.id}`,
+                                        {
+                                          googleAdsCustomerId: googleAdsCustomerId || null,
+                                          googleAdsLoginCustomerId: googleAdsLoginCustomerId || null,
+                                          demoMode: false,
+                                        },
+                                      ),
+                                    `Google Ads account updated for ${client.name}.`,
+                                  );
+                                }}
+                              >
+                                <div className="grid gap-3 lg:grid-cols-2">
+                                  <FieldWithHelp
+                                    label="Customer ID"
+                                    helpTitle="Which Google Ads ID goes here?"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Use the advertiser <strong>Customer ID</strong> you want
+                                          to report on.
+                                        </p>
+                                        <p>
+                                          Google Ads usually shows it as <code>123-456-7890</code>.
+                                          You can paste it with or without hyphens.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="googleAdsCustomerId"
+                                      placeholder="Google Ads customer ID"
+                                      defaultValue={integration.settings.googleAdsCustomerId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                  <FieldWithHelp
+                                    label="Login Customer ID"
+                                    helpTitle="When is login customer ID needed?"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Fill this only when the connected Google user accesses the
+                                          advertiser through a <strong>manager account (MCC)</strong>.
+                                        </p>
+                                        <p>
+                                          Use the manager account customer ID, also with or without
+                                          hyphens.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="googleAdsLoginCustomerId"
+                                      placeholder="Manager account ID (optional)"
+                                      defaultValue={integration.settings.googleAdsLoginCustomerId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                </div>
+                                <button
+                                  type="submit"
+                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                >
+                                  Save Google Ads IDs
+                                </button>
+                              </form>
+                            ) : null}
+
+                            {integration.platformKey === "meta_ads" ? (
+                              <form
+                                className="mt-4 grid gap-4"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  const formData = new FormData(event.currentTarget);
+                                  const apiKey = String(formData.get("apiKey") ?? "").trim();
                                   const adAccountId = String(formData.get("adAccountId") ?? "").trim();
                                   runTask(
                                     () =>
                                       patchJson(
                                         `/api/clients/${client.id}/integrations/${integration.id}`,
                                         {
+                                          ...(apiKey
+                                            ? {
+                                                apiKey,
+                                                authOrigin: "api_key",
+                                              }
+                                            : {}),
                                           adAccountId: adAccountId || null,
                                           demoMode: false,
                                         },
@@ -1081,16 +1453,57 @@ export function DashboardShell({
                                   );
                                 }}
                               >
-                                <Input
-                                  name="adAccountId"
-                                  placeholder="Meta ad account ID (1234567890 or act_1234567890)"
-                                  defaultValue={integration.settings.adAccountId ?? ""}
-                                />
+                                <div className="grid gap-3 lg:grid-cols-2">
+                                  <FieldWithHelp
+                                    label="Access token"
+                                    helpTitle="Which Meta credential goes here?"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Paste the <strong>Meta Ads access token</strong> used by
+                                          your reporting connection.
+                                        </p>
+                                        <p>
+                                          Leave this field blank when you only want to keep the
+                                          current token and update the account ID.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="apiKey"
+                                      type="password"
+                                      placeholder="Meta access token"
+                                    />
+                                  </FieldWithHelp>
+                                  <FieldWithHelp
+                                    label="Ad account ID"
+                                    helpTitle="Which Meta ID should I paste?"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Use the numeric <strong>Ad Account ID</strong> shown in
+                                          Meta, such as <code>61589750244560</code>.
+                                        </p>
+                                        <p>
+                                          You can also paste it as <code>act_61589750244560</code>.
+                                          The connector accepts both formats.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="adAccountId"
+                                      placeholder="Meta ad account ID"
+                                      defaultValue={integration.settings.adAccountId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                </div>
                                 <button
                                   type="submit"
-                                  className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
+                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
                                 >
-                                  Save ad account
+                                  Save Meta connection
                                 </button>
                               </form>
                             ) : null}
@@ -1292,12 +1705,69 @@ export function DashboardShell({
                               </form>
                             ) : null}
 
+                            {integration.platformKey === "google_search_console" &&
+                            integration.metadata?.propertySummaries?.length ? (
+                              <>
+                                <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">
+                                  {integration.metadata.propertySummaries.length} accessible Search
+                                  Console properties detected
+                                </p>
+                                <MetadataSummaryPreview
+                                  label="Accessible properties"
+                                  summaries={integration.metadata.propertySummaries}
+                                />
+                              </>
+                            ) : null}
+
+                            {integration.platformKey === "google_business_profile" &&
+                            integration.metadata?.accountSummaries?.length ? (
+                              <>
+                                <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">
+                                  {integration.metadata.accountSummaries.length} accessible
+                                  Business Profile accounts detected
+                                  {integration.metadata.locationSummaries?.length
+                                    ? ` · ${integration.metadata.locationSummaries.length} locations loaded`
+                                    : ""}
+                                </p>
+                                <MetadataSummaryPreview
+                                  label="Accessible accounts"
+                                  summaries={integration.metadata.accountSummaries}
+                                />
+                                {integration.metadata.locationSummaries?.length ? (
+                                  <MetadataSummaryPreview
+                                    label="Accessible locations"
+                                    summaries={integration.metadata.locationSummaries}
+                                  />
+                                ) : null}
+                              </>
+                            ) : null}
+
                             {integration.platformKey === "google_analytics" &&
                             integration.metadata?.propertySummaries?.length ? (
-                              <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">
-                                {integration.metadata.propertySummaries.length} accessible GA4
-                                properties detected
-                              </p>
+                              <>
+                                <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">
+                                  {integration.metadata.propertySummaries.length} accessible GA4
+                                  properties detected
+                                </p>
+                                <MetadataSummaryPreview
+                                  label="Accessible properties"
+                                  summaries={integration.metadata.propertySummaries}
+                                />
+                              </>
+                            ) : null}
+
+                            {integration.platformKey === "google_ads" &&
+                            integration.metadata?.propertySummaries?.length ? (
+                              <>
+                                <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">
+                                  {integration.metadata.propertySummaries.length} accessible Google
+                                  Ads customers detected
+                                </p>
+                                <MetadataSummaryPreview
+                                  label="Accessible customers"
+                                  summaries={integration.metadata.propertySummaries}
+                                />
+                              </>
                             ) : null}
                           </article>
                         ))
@@ -1309,6 +1779,14 @@ export function DashboardShell({
                         Configure at least one integration until it reaches live-ready status before running a client-facing audit.
                       </p>
                     ) : null}
+
+                    <ReportPeriodPanel
+                      clientId={client.id}
+                      clientName={client.name}
+                      reportPeriods={client.reportPeriods}
+                      readyIntegrationCount={connectedIntegrations.length}
+                      runTask={runTask}
+                    />
 
                     <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4">
                       <div className="flex items-center justify-between">
@@ -1445,35 +1923,90 @@ function FastNavigationCard({
 }: {
   clients: DashboardData["clients"];
 }) {
+  const [query, setQuery] = useState("");
+  const filteredClients = clients.filter((client) =>
+    `${client.name} ${client.industry} ${client.primaryDomain ?? ""}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase()),
+  );
+
   return (
-    <div className="rounded-[1.5rem] border border-[#8f7a2f] bg-[linear-gradient(135deg,rgba(243,193,91,0.12)_0%,rgba(255,255,255,0.04)_100%)] p-4">
-      <p className="text-xs uppercase tracking-[0.28em] text-[#f3d78f]">Fast navigation tool</p>
-      <p className="mt-3 text-sm text-slate-300">
-        Jump straight to the client workspace and open the client block you need.
-      </p>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <a
-          href="#workspace"
-          className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-white transition hover:bg-white/[0.08]"
-        >
-          Client workspace
-        </a>
+    <div className="rounded-[1.5rem] border border-[#8f7a2f] bg-[linear-gradient(135deg,rgba(243,193,91,0.12)_0%,rgba(255,255,255,0.04)_100%)] p-5">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="max-w-xl">
+          <p className="text-xs uppercase tracking-[0.28em] text-[#f3d78f]">
+            Fast navigation tool
+          </p>
+          <p className="mt-3 text-sm leading-6 text-slate-300">
+            Jump straight to the client workspace and open the exact client block without scanning
+            the full page.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <a
+            href="#workspace-title"
+            className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-white transition hover:bg-white/[0.08]"
+          >
+            Client workspace
+          </a>
+        </div>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
+
+      <div className="mt-4">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Find client by name, industry, or domain"
+          className="w-full rounded-2xl border border-white/10 bg-[#111925] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 xl:max-w-md"
+        />
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
         {clients.length === 0 ? (
-          <span className="rounded-full border border-dashed border-white/12 px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-400">
+          <span className="rounded-[1rem] border border-dashed border-white/12 px-3 py-4 text-sm text-slate-400">
             No clients yet
           </span>
+        ) : filteredClients.length === 0 ? (
+          <span className="rounded-[1rem] border border-dashed border-white/12 px-3 py-4 text-sm text-slate-400">
+            No clients match this search
+          </span>
         ) : (
-          clients.map((client) => (
-            <a
-              key={client.id}
-              href={`#client-${client.id}`}
-              className="rounded-full border border-white/10 bg-[#111925] px-3 py-2 text-xs uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/[0.08]"
-            >
-              {client.name}
-            </a>
-          ))
+          filteredClients.map((client) => {
+            const readyIntegrations = client.integrations.filter(
+              (integration) => integration.connectionStatus === "ready",
+            ).length;
+
+            return (
+              <a
+                key={client.id}
+                href={`#client-${client.id}`}
+                className="min-w-0 rounded-[1rem] border border-white/10 bg-[#111925] px-4 py-3 transition hover:border-white/20 hover:bg-white/[0.08]"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-white">{client.name}</p>
+                    <p className="mt-1 truncate text-xs text-slate-400">
+                      {client.primaryDomain ?? client.industry}
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-slate-300">
+                    Open
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
+                    {readyIntegrations} ready
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-slate-300">
+                    {client.locations.length} locations
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-slate-300">
+                    {client.audits.length} audits
+                  </span>
+                </div>
+              </a>
+            );
+          })
         )}
       </div>
     </div>
@@ -1499,6 +2032,36 @@ function FieldWithHelp({
       </span>
       {children}
     </label>
+  );
+}
+
+function MetadataSummaryPreview({
+  label,
+  summaries,
+}: {
+  label: string;
+  summaries: IntegrationPropertySummary[];
+}) {
+  return (
+    <div className="mt-3 rounded-[1rem] border border-white/10 bg-[#111925] p-3">
+      <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {summaries.slice(0, 6).map((summary) => (
+          <span
+            key={summary.resourceName}
+            className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300"
+            title={summary.resourceName}
+          >
+            {summary.displayName}
+          </span>
+        ))}
+        {summaries.length > 6 ? (
+          <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-400">
+            +{summaries.length - 6} more
+          </span>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

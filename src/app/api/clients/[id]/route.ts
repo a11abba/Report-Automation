@@ -14,6 +14,9 @@ const updateClientSchema = z.object({
   primaryDomain: z.string().url().nullable().optional(),
   reportLanguage: z.enum(reportLanguages).optional(),
   reportFocus: z.enum(reportFocuses).optional(),
+  monthlyReportEnabled: z.boolean().optional(),
+  monthlyReportDay: z.number().int().min(1).max(31).nullable().optional(),
+  monthlyReportAutoGenerate: z.boolean().optional(),
 });
 
 export async function PATCH(

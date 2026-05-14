@@ -45,7 +45,8 @@ function assertGooglePlatform(platformKey: PlatformKey) {
   if (
     platformKey !== "google_search_console" &&
     platformKey !== "google_business_profile" &&
-    platformKey !== "google_analytics"
+    platformKey !== "google_analytics" &&
+    platformKey !== "google_ads"
   ) {
     throw new Error(`Platform "${platformKey}" does not use Google OAuth.`);
   }
@@ -111,6 +112,9 @@ export function getGoogleScopes(platformKey: PlatformKey): string[] {
       "email",
       "profile",
     ];
+  }
+  if (platformKey === "google_ads") {
+    return ["https://www.googleapis.com/auth/adwords"];
   }
   return [
     "https://www.googleapis.com/auth/analytics.readonly",

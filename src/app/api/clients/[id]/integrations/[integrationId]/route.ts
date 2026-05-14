@@ -6,6 +6,10 @@ import { loadClientForViewer, loadIntegrationForViewer, requireRouteViewer } fro
 
 const updateIntegrationSchema = z.object({
   displayName: z.string().min(2).optional(),
+  apiKey: z.string().nullable().optional(),
+  authOrigin: z
+    .enum(["none", "api_key", "oauth", "service_account"])
+    .optional(),
   demoMode: z.boolean().optional(),
   targetUrl: z.string().nullable().optional(),
   propertyId: z.string().nullable().optional(),
@@ -13,6 +17,8 @@ const updateIntegrationSchema = z.object({
   businessAccountId: z.string().nullable().optional(),
   businessProfileId: z.string().nullable().optional(),
   adAccountId: z.string().nullable().optional(),
+  googleAdsCustomerId: z.string().nullable().optional(),
+  googleAdsLoginCustomerId: z.string().nullable().optional(),
   microsoftCustomerId: z.string().nullable().optional(),
   microsoftAccountId: z.string().nullable().optional(),
   merchantStoreId: z.string().nullable().optional(),
@@ -54,17 +60,27 @@ export async function PATCH(
     if (body.businessAccountId !== undefined) settingsPatch.businessAccountId = body.businessAccountId;
     if (body.businessProfileId !== undefined) settingsPatch.businessProfileId = body.businessProfileId;
     if (body.adAccountId !== undefined) settingsPatch.adAccountId = body.adAccountId;
+    if (body.googleAdsCustomerId !== undefined) settingsPatch.googleAdsCustomerId = body.googleAdsCustomerId;
+    if (body.googleAdsLoginCustomerId !== undefined) settingsPatch.googleAdsLoginCustomerId = body.googleAdsLoginCustomerId;
     if (body.microsoftCustomerId !== undefined) settingsPatch.microsoftCustomerId = body.microsoftCustomerId;
     if (body.microsoftAccountId !== undefined) settingsPatch.microsoftAccountId = body.microsoftAccountId;
     if (body.merchantStoreId !== undefined) settingsPatch.merchantStoreId = body.merchantStoreId;
     if (body.merchantFeedId !== undefined) settingsPatch.merchantFeedId = body.merchantFeedId;
+    const credentialsPatch: NonNullable<
+      Parameters<typeof updateIntegrationRecord>[1]["credentials"]
+    > = {};
+    if (body.apiKey !== undefined && body.apiKey !== null && body.apiKey.trim().length > 0) {
+      credentialsPatch.apiKey = body.apiKey.trim();
+    }
+    if (body.authOrigin !== undefined) credentialsPatch.authOrigin = body.authOrigin;
+    if (body.serviceAccountEmail !== undefined) {
+      credentialsPatch.serviceAccountEmail = body.serviceAccountEmail ?? undefined;
+    }
 
     const integration = await updateIntegrationRecord(integrationId, {
       displayName: body.displayName,
       credentials:
-        body.serviceAccountEmail === undefined
-          ? undefined
-          : { serviceAccountEmail: body.serviceAccountEmail ?? undefined },
+        Object.keys(credentialsPatch).length > 0 ? credentialsPatch : undefined,
       settings: settingsPatch,
     });
 

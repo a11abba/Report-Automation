@@ -21,6 +21,7 @@ export const platformKeys = [
   "google_search_console",
   "google_business_profile",
   "google_analytics",
+  "google_ads",
   "microsoft_ads",
   "microsoft_merchant_center",
   "pagespeed_insights",
@@ -62,7 +63,12 @@ export const integrationAuthOrigins = [
   "oauth",
   "service_account",
 ] as const;
-export const appRoles = ["platform_admin", "account_user"] as const;
+export const appRoles = [
+  "platform_admin",
+  "account_admin",
+  "account_operator",
+  "account_user",
+] as const;
 export const accountMembershipStatuses = ["invited", "active", "revoked"] as const;
 export const subscriptionStatuses = ["trialing", "active", "past_due", "paused", "canceled"] as const;
 export const reportLanguages = ["pt-BR", "pt-PT", "en"] as const;
@@ -73,6 +79,18 @@ export const reportFocuses = [
   "paid_media",
 ] as const;
 export const integrationConnectionStatuses = ["demo", "attention", "ready"] as const;
+export const reportPeriodStatuses = ["draft", "queued", "running", "completed", "failed"] as const;
+export const contextEntryTypes = [
+  "note",
+  "budget_change",
+  "campaign_change",
+  "landing_page",
+  "tracking_issue",
+  "sales_issue",
+  "seo_change",
+  "other",
+] as const;
+export const confidenceLevels = ["info", "warning"] as const;
 
 export type PlatformType = (typeof platformTypes)[number];
 export type PlatformKey = (typeof platformKeys)[number];
@@ -87,6 +105,9 @@ export type SubscriptionStatus = (typeof subscriptionStatuses)[number];
 export type ReportLanguage = (typeof reportLanguages)[number];
 export type ReportFocus = (typeof reportFocuses)[number];
 export type IntegrationConnectionStatus = (typeof integrationConnectionStatuses)[number];
+export type ReportPeriodStatus = (typeof reportPeriodStatuses)[number];
+export type ContextEntryType = (typeof contextEntryTypes)[number];
+export type ConfidenceLevel = (typeof confidenceLevels)[number];
 
 export type MetricUnit =
   | "count"
@@ -477,6 +498,36 @@ export interface LocationScore {
   notes: string[];
 }
 
+export interface ReportPeriodManualInputs {
+  leads: number | null;
+  qualifiedLeads: number | null;
+  sales: number | null;
+  revenue: number | null;
+  notes: string | null;
+}
+
+export interface ReportPeriodReference {
+  id: string | null;
+  periodKey: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  baselinePeriodId: string | null;
+  baselinePeriodKey: string | null;
+  manualInputs: ReportPeriodManualInputs | null;
+}
+
+export interface ReportNarrativeItem {
+  title: string;
+  detail: string;
+  evidence: string[];
+}
+
+export interface ReportConfidenceNote {
+  label: string;
+  detail: string;
+  level: ConfidenceLevel;
+}
+
 export interface AuditReportPayload {
   accountId: string;
   auditId: string;
@@ -494,6 +545,7 @@ export interface AuditReportPayload {
     strengths: string[];
     locationCount: number;
   };
+  reportPeriod: ReportPeriodReference;
   execution: {
     includedIntegrations: Array<{
       id: string;
@@ -510,6 +562,11 @@ export interface AuditReportPayload {
   sectionScores: SectionScore[];
   locationScores: LocationScore[];
   findings: AuditFinding[];
+  dataFacts: ReportNarrativeItem[];
+  providedContext: ReportNarrativeItem[];
+  hypotheses: ReportNarrativeItem[];
+  recommendations: ReportNarrativeItem[];
+  confidenceNotes: ReportConfidenceNote[];
   snapshot: NormalizedBusinessSnapshot;
 }
 
@@ -559,6 +616,9 @@ export interface ClientRecord {
   primaryDomain: string | null;
   reportLanguage: ReportLanguage;
   reportFocus: ReportFocus;
+  monthlyReportEnabled: boolean;
+  monthlyReportDay: number | null;
+  monthlyReportAutoGenerate: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -601,6 +661,8 @@ export interface IntegrationPropertySummary {
 
 export interface ConnectorMetadataResult {
   propertySummaries?: IntegrationPropertySummary[];
+  accountSummaries?: IntegrationPropertySummary[];
+  locationSummaries?: IntegrationPropertySummary[];
 }
 
 export interface CredentialSecretPayload {
@@ -622,7 +684,7 @@ export interface OAuthSessionRecord {
 }
 
 export const auditEventLevels = ["info", "warn", "error"] as const;
-export const jobKinds = ["audit_run", "location_sync", "report_export"] as const;
+export const jobKinds = ["audit_run", "location_sync", "report_export", "report_schedule"] as const;
 export const jobStatuses = ["queued", "running", "completed", "failed"] as const;
 
 export type AuditEventLevel = (typeof auditEventLevels)[number];
@@ -637,6 +699,8 @@ export interface IntegrationSettings {
   businessProfileId?: string | null;
   ga4PropertyId?: string | null;
   adAccountId?: string | null;
+  googleAdsCustomerId?: string | null;
+  googleAdsLoginCustomerId?: string | null;
   microsoftCustomerId?: string | null;
   microsoftAccountId?: string | null;
   merchantStoreId?: string | null;
@@ -689,6 +753,11 @@ export interface JobRecord {
 export interface AuditScope {
   integrationIds?: string[];
   locationIds?: string[];
+  reportPeriodId?: string;
+  baselinePeriodId?: string;
+  periodKey?: string;
+  periodStart?: string;
+  periodEnd?: string;
   excludedIntegrations?: Array<{
     id: string;
     label: string;
@@ -727,6 +796,41 @@ export interface LocationRecord {
   landingPageUrl: string | null;
   metrics: LocationMetrics;
   findings: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReportPeriodRecord {
+  id: string;
+  accountId: string;
+  clientId: string;
+  periodKey: string;
+  periodStart: string;
+  periodEnd: string;
+  baselinePeriodId: string | null;
+  status: ReportPeriodStatus;
+  auditId: string | null;
+  manualInputs: ReportPeriodManualInputs;
+  generatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ContextEntryRecord {
+  id: string;
+  accountId: string;
+  clientId: string;
+  reportPeriodId: string;
+  channel: string | null;
+  source: string | null;
+  campaignReference: string | null;
+  entryType: ContextEntryType;
+  text: string;
+  tags: string[];
+  effectiveStartDate: string | null;
+  effectiveEndDate: string | null;
+  authorName: string;
+  authorEmail: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,4 +1,6 @@
 import dns from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
 import net from "node:net";
 
 const BLOCKED_HOSTNAMES = new Set([
@@ -28,6 +30,11 @@ const IPV4_BLOCKLIST: Array<[number, number]> = [
   [toIpv4Int("203.0.113.0"), toIpv4Int("203.0.113.255")],
   [toIpv4Int("224.0.0.0"), toIpv4Int("255.255.255.255")],
 ];
+
+interface ResolvedAuditTarget {
+  addresses: string[];
+  normalizedUrl: string;
+}
 
 function toIpv4Int(address: string) {
   return address
@@ -76,7 +83,7 @@ function assertAllowedAddress(address: string) {
   }
 }
 
-async function assertPublicHostname(hostname: string) {
+async function resolvePublicHostname(hostname: string) {
   const normalizedHostname = hostname.trim().toLowerCase();
   if (
     BLOCKED_HOSTNAMES.has(normalizedHostname) ||
@@ -87,7 +94,7 @@ async function assertPublicHostname(hostname: string) {
 
   if (net.isIP(normalizedHostname)) {
     assertAllowedAddress(normalizedHostname);
-    return;
+    return [normalizedHostname];
   }
 
   let records: Array<{ address: string; family: number }>;
@@ -101,9 +108,60 @@ async function assertPublicHostname(hostname: string) {
     throw new Error("Target URL hostname could not be resolved.");
   }
 
-  for (const record of records) {
-    assertAllowedAddress(record.address);
+  const addresses = records.map((record) => record.address);
+  for (const address of addresses) {
+    assertAllowedAddress(address);
   }
+
+  return [...new Set(addresses)];
+}
+
+function buildHostHeader(url: URL) {
+  const defaultPort = url.protocol === "https:" ? "443" : "80";
+  const hostname = net.isIP(url.hostname) === 6 ? `[${url.hostname}]` : url.hostname;
+  return url.port && url.port !== defaultPort ? `${hostname}:${url.port}` : hostname;
+}
+
+function toNodeHeaders(headers: Headers, hostHeader: string) {
+  const values: Record<string, string> = { host: hostHeader };
+  headers.forEach((value, key) => {
+    if (key.toLowerCase() !== "host") {
+      values[key] = value;
+    }
+  });
+  if (!headers.has("accept-encoding")) {
+    values["accept-encoding"] = "identity";
+  }
+  return values;
+}
+
+function toNodeBody(body: RequestInit["body"]) {
+  if (body == null) {
+    return null;
+  }
+
+  if (typeof body === "string" || body instanceof Uint8Array) {
+    return body;
+  }
+
+  if (body instanceof ArrayBuffer) {
+    return Buffer.from(body);
+  }
+
+  if (body instanceof URLSearchParams) {
+    return body.toString();
+  }
+
+  throw new Error("Unsupported request body for safe audit fetch.");
+}
+
+async function resolveSafeAuditTarget(input: string): Promise<ResolvedAuditTarget> {
+  const normalizedUrl = normalizeAuditUrl(input);
+  const addresses = await resolvePublicHostname(new URL(normalizedUrl).hostname);
+  return {
+    addresses,
+    normalizedUrl,
+  };
 }
 
 export function normalizeAuditUrl(input: string) {
@@ -131,9 +189,94 @@ export function normalizeAuditUrl(input: string) {
 }
 
 export async function assertSafeAuditUrl(input: string) {
-  const normalized = normalizeAuditUrl(input);
-  await assertPublicHostname(new URL(normalized).hostname);
-  return normalized;
+  return (await resolveSafeAuditTarget(input)).normalizedUrl;
+}
+
+async function requestPinnedAddress(
+  targetUrl: string,
+  address: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const url = new URL(targetUrl);
+  const headers = new Headers(init?.headers);
+  const body = toNodeBody(init?.body);
+  const transport = url.protocol === "https:" ? https : http;
+
+  return new Promise<Response>((resolve, reject) => {
+    const request = transport.request(
+      {
+        hostname: address,
+        port: url.port || undefined,
+        method: init?.method ?? "GET",
+        path: `${url.pathname}${url.search}`,
+        headers: toNodeHeaders(headers, buildHostHeader(url)),
+        servername: url.protocol === "https:" ? url.hostname : undefined,
+        rejectUnauthorized: url.protocol === "https:" ? true : undefined,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer | string) => {
+          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        });
+        response.on("end", () => {
+          const responseHeaders = new Headers();
+          for (const [key, value] of Object.entries(response.headers)) {
+            if (Array.isArray(value)) {
+              value.forEach((item) => responseHeaders.append(key, item));
+            } else if (value !== undefined) {
+              responseHeaders.set(key, value);
+            }
+          }
+
+          resolve(
+            new Response(Buffer.concat(chunks), {
+              status: response.statusCode ?? 502,
+              headers: responseHeaders,
+            }),
+          );
+        });
+      },
+    );
+
+    request.on("error", reject);
+
+    if (init?.signal) {
+      if (init.signal.aborted) {
+        request.destroy(new Error("The request was aborted."));
+      } else {
+        init.signal.addEventListener(
+          "abort",
+          () => request.destroy(new Error("The request was aborted.")),
+          { once: true },
+        );
+      }
+    }
+
+    if (body != null) {
+      request.write(body);
+    }
+
+    request.end();
+  });
+}
+
+async function requestPinnedTarget(
+  target: ResolvedAuditTarget,
+  init?: RequestInit,
+) {
+  let lastError: unknown = null;
+
+  for (const address of target.addresses) {
+    try {
+      return await requestPinnedAddress(target.normalizedUrl, address, init);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Target URL could not be fetched from a public IP address.");
 }
 
 export async function fetchWithSafeRedirects(
@@ -141,10 +284,10 @@ export async function fetchWithSafeRedirects(
   init?: RequestInit,
   maxRedirects = 3,
 ): Promise<Response> {
-  let currentUrl = await assertSafeAuditUrl(input);
+  let currentTarget = await resolveSafeAuditTarget(input);
 
   for (let attempt = 0; attempt <= maxRedirects; attempt += 1) {
-    const response = await fetch(currentUrl, {
+    const response = await requestPinnedTarget(currentTarget, {
       ...init,
       redirect: "manual",
     });
@@ -158,7 +301,9 @@ export async function fetchWithSafeRedirects(
       return response;
     }
 
-    currentUrl = await assertSafeAuditUrl(new URL(location, currentUrl).toString());
+    currentTarget = await resolveSafeAuditTarget(
+      new URL(location, currentTarget.normalizedUrl).toString(),
+    );
   }
 
   throw new Error("Too many redirects while fetching target URL.");

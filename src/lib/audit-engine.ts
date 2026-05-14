@@ -1,6 +1,8 @@
 import { PgBoss } from "pg-boss";
 import {
   type AuditScope,
+  type AuditReportPayload,
+  type ContextEntryRecord,
   type ClientRecord,
   type ConnectorMetadataResult,
   type ConnectorValidationResult,
@@ -8,8 +10,10 @@ import {
   type IntegrationRecord,
   type LocationRecord,
   type PlatformKey,
+  type ReportPeriodRecord,
 } from "@/lib/audit/types";
 import type { AuthSession } from "@/lib/auth-session";
+import { canViewAccountBilling, normalizeAppRole } from "@/lib/auth-access";
 import { getConnector, mergeSnapshots, platformCatalog } from "@/lib/connectors";
 import {
   buildGoogleOAuthUrl,
@@ -23,8 +27,10 @@ import {
   getMicrosoftScopes,
   refreshMicrosoftAccessToken,
 } from "@/lib/microsoft-auth";
+import { resolveScheduledMonthlyPeriod } from "@/lib/report-scheduler-utils";
 import { buildReport, evaluateRules, rulePackCatalog } from "@/lib/rules";
 import { getPdfRendererStatus } from "@/lib/reports";
+import { emptyReportPeriodManualInputs } from "@/lib/report-period-utils";
 import { getStore } from "@/lib/storage";
 import {
   createIntegrationWithVault,
@@ -145,12 +151,60 @@ async function getIntegrationExecutionState(client: ClientRecord, integration: I
   }
 }
 
+function getAuditDateRange(scope: AuditScope | null | undefined) {
+  if (!scope?.periodStart || !scope.periodEnd) {
+    return undefined;
+  }
+  return {
+    startDate: scope.periodStart,
+    endDate: scope.periodEnd,
+  };
+}
+
+async function getReportPeriodBundle(
+  reportPeriodId: string | undefined,
+): Promise<{
+  reportPeriod: ReportPeriodRecord | null;
+  contextEntries: ContextEntryRecord[];
+  baselineReport: AuditReportPayload | null;
+}> {
+  if (!reportPeriodId) {
+    return {
+      reportPeriod: null,
+      contextEntries: [],
+      baselineReport: null,
+    };
+  }
+  const store = await getStore();
+  const reportPeriod = await store.getReportPeriod(reportPeriodId);
+  if (!reportPeriod) {
+    return {
+      reportPeriod: null,
+      contextEntries: [],
+      baselineReport: null,
+    };
+  }
+  const contextEntries = await store.listContextEntriesByReportPeriod(reportPeriodId);
+  const baselinePeriod = reportPeriod.baselinePeriodId
+    ? await store.getReportPeriod(reportPeriod.baselinePeriodId)
+    : null;
+  const baselineReport = baselinePeriod?.auditId
+    ? await store.getReport(baselinePeriod.auditId)
+    : null;
+  return {
+    reportPeriod,
+    contextEntries,
+    baselineReport,
+  };
+}
+
 function isGoogleOAuthIntegration(integration: IntegrationRecord) {
   return (
     integration.credentials.authOrigin === "oauth" &&
     (integration.platformKey === "google_search_console" ||
       integration.platformKey === "google_business_profile" ||
-      integration.platformKey === "google_analytics")
+      integration.platformKey === "google_analytics" ||
+      integration.platformKey === "google_ads")
   );
 }
 
@@ -218,16 +272,44 @@ export async function listDashboardData(
   const clientsWithRelations = await Promise.all(
     visibleClients.map(async (client) => {
       const integrations = await store.listIntegrationsByClient(client.id);
+      const duplicatePlatformKeys = new Set(
+        integrations
+          .map((integration) => integration.platformKey)
+          .filter((platformKey, index, all) => all.indexOf(platformKey) !== index),
+      );
       const integrationStates = await Promise.all(
         integrations.map(async (integration) => {
           const state = await getIntegrationExecutionState(client, integration);
+          const duplicateDetected = duplicatePlatformKeys.has(integration.platformKey);
           return {
             ...integration,
-            connectionStatus: state.connectionStatus,
-            validationMessage: state.validationMessage,
-            connectionDetails: state.validation,
+            connectionStatus: duplicateDetected ? ("attention" as const) : state.connectionStatus,
+            validationMessage: duplicateDetected
+              ? `Duplicate ${integration.platformKey} integration detected. Keep one record per platform for reliable monthly reporting.`
+              : state.validationMessage,
+            connectionDetails: duplicateDetected
+              ? {
+                  ...state.validation,
+                  valid: false,
+                  liveReady: false,
+                }
+              : state.validation,
             healthCheck: state.healthCheck,
             metadata: state.metadata,
+          };
+        }),
+      );
+      const reportPeriods = await store.listReportPeriodsByClient(client.id);
+      const reportPeriodsWithContext = await Promise.all(
+        reportPeriods.map(async (reportPeriod) => {
+          const [contextEntries, baselinePeriod] = await Promise.all([
+            store.listContextEntriesByReportPeriod(reportPeriod.id),
+            reportPeriod.baselinePeriodId ? store.getReportPeriod(reportPeriod.baselinePeriodId) : Promise.resolve(null),
+          ]);
+          return {
+            ...reportPeriod,
+            baselinePeriodKey: baselinePeriod?.periodKey ?? null,
+            contextEntries,
           };
         }),
       );
@@ -236,6 +318,7 @@ export async function listDashboardData(
         integrations: integrationStates,
         locations: await store.listLocationsByClient(client.id),
         audits: visibleAudits.filter((audit) => audit.clientId === client.id).slice(0, 5),
+        reportPeriods: reportPeriodsWithContext,
       };
     }),
   );
@@ -263,19 +346,32 @@ export async function listDashboardData(
       ).reduce((sum, value) => sum + value, 0);
       return {
         ...account,
-        members,
+        members: members.map((member) => ({
+          ...member,
+          role: normalizeAppRole(member.role),
+        })),
         clientCount: accountClients.length,
         lastAuditAt: accountAudits[0]?.createdAt ?? null,
         readyIntegrations,
       };
     }),
   );
+  const currentAccount =
+    accountSummaries.find((account) => account.id === viewer.accountId) ?? null;
   return {
     platforms: platformCatalog,
     rulePacks: rulePackCatalog,
     accounts: accountSummaries,
     currentAccount:
-      accountSummaries.find((account) => account.id === viewer.accountId) ?? null,
+      currentAccount && !canViewAccountBilling(viewer, currentAccount.id)
+        ? {
+            ...currentAccount,
+            subscriptionStatus: null,
+            serviceTier: null,
+            billingCycleAnchor: null,
+            trialEndsAt: null,
+          }
+        : currentAccount,
     clients: clientsWithRelations,
     recentAudits: visibleAudits.slice(0, 10),
     pdfRenderer: getPdfRendererStatus(),
@@ -288,6 +384,7 @@ export async function runAudit(auditId: string) {
   if (!audit) throw new Error(`Audit ${auditId} not found.`);
   const client = await store.getClient(audit.clientId);
   if (!client) throw new Error(`Client ${audit.clientId} not found.`);
+  const dateRange = getAuditDateRange(audit.scope);
 
   const allIntegrations = await store.listIntegrationsByClient(client.id);
   const integrations = allIntegrations.filter((integration) =>
@@ -299,6 +396,12 @@ export async function runAudit(auditId: string) {
     (job) => job.payload["auditId"] === auditId,
   );
   await store.updateAudit(auditId, { status: "running", errorMessage: null });
+  if (audit.scope?.reportPeriodId) {
+    await store.updateReportPeriod(audit.scope.reportPeriodId, {
+      status: "running",
+      auditId,
+    });
+  }
   if (auditJob) {
     await store.updateJob(auditJob.id, {
       status: "running",
@@ -320,6 +423,7 @@ export async function runAudit(auditId: string) {
           client,
           integration: executableIntegration,
           requestedCapabilities: connector.capabilities(),
+          dateRange,
         });
       }),
     );
@@ -363,13 +467,19 @@ export async function runAudit(auditId: string) {
       );
     }
     const findings = evaluateRules(merged);
+    const reportPeriodBundle = await getReportPeriodBundle(audit.scope?.reportPeriodId);
     const report = buildReport(auditId, client, merged, findings, {
-      includedIntegrations: integrations.map((integration) => ({
-        id: integration.id,
-        label: integration.displayName,
-        platformKey: integration.platformKey,
-      })),
-      excludedIntegrations: audit.scope?.excludedIntegrations ?? [],
+      execution: {
+        includedIntegrations: integrations.map((integration) => ({
+          id: integration.id,
+          label: integration.displayName,
+          platformKey: integration.platformKey,
+        })),
+        excludedIntegrations: audit.scope?.excludedIntegrations ?? [],
+      },
+      reportPeriod: reportPeriodBundle.reportPeriod,
+      baselineReport: reportPeriodBundle.baselineReport,
+      contextEntries: reportPeriodBundle.contextEntries,
     });
     await store.saveReport(auditId, report);
     await store.updateAudit(auditId, {
@@ -379,6 +489,13 @@ export async function runAudit(auditId: string) {
       completedAt: new Date().toISOString(),
       errorMessage: null,
     });
+    if (audit.scope?.reportPeriodId) {
+      await store.updateReportPeriod(audit.scope.reportPeriodId, {
+        status: "completed",
+        auditId,
+        generatedAt: report.generatedAt,
+      });
+    }
     if (auditJob) {
       await store.updateJob(auditJob.id, {
         status: "completed",
@@ -399,6 +516,12 @@ export async function runAudit(auditId: string) {
       errorMessage: error instanceof Error ? error.message : "Unknown audit error",
       completedAt: new Date().toISOString(),
     });
+    if (audit.scope?.reportPeriodId) {
+      await store.updateReportPeriod(audit.scope.reportPeriodId, {
+        status: "failed",
+        auditId,
+      });
+    }
     if (auditJob) {
       await store.updateJob(auditJob.id, {
         status: "failed",
@@ -537,7 +660,7 @@ export async function createClientRecord(
 export async function updateClientRecord(
   clientId: string,
   input: Partial<
-    Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus">
+    Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus" | "monthlyReportEnabled" | "monthlyReportDay" | "monthlyReportAutoGenerate">
   >,
 ) {
   const store = await getStore();
@@ -549,6 +672,314 @@ export async function deleteClientRecord(clientId: string) {
   return store.deleteClient(clientId);
 }
 
+export async function listReportPeriodsForClient(clientId: string) {
+  const store = await getStore();
+  const reportPeriods = await store.listReportPeriodsByClient(clientId);
+  return Promise.all(
+    reportPeriods.map(async (reportPeriod) => {
+      const [contextEntries, baselinePeriod] = await Promise.all([
+        store.listContextEntriesByReportPeriod(reportPeriod.id),
+        reportPeriod.baselinePeriodId ? store.getReportPeriod(reportPeriod.baselinePeriodId) : Promise.resolve(null),
+      ]);
+      return {
+        ...reportPeriod,
+        baselinePeriodKey: baselinePeriod?.periodKey ?? null,
+        contextEntries,
+      };
+    }),
+  );
+}
+
+export async function getReportPeriodDetail(reportPeriodId: string) {
+  const store = await getStore();
+  const reportPeriod = await store.getReportPeriod(reportPeriodId);
+  if (!reportPeriod) {
+    return {
+      reportPeriod: null,
+      contextEntries: [],
+      report: null,
+      baselinePeriod: null,
+    };
+  }
+  const [contextEntries, report, baselinePeriod] = await Promise.all([
+    store.listContextEntriesByReportPeriod(reportPeriodId),
+    reportPeriod.auditId ? store.getReport(reportPeriod.auditId) : Promise.resolve(null),
+    reportPeriod.baselinePeriodId ? store.getReportPeriod(reportPeriod.baselinePeriodId) : Promise.resolve(null),
+  ]);
+  return {
+    reportPeriod,
+    contextEntries,
+    report,
+    baselinePeriod,
+  };
+}
+
+export async function createReportPeriodRecord(
+  clientId: string,
+  input: {
+    periodKey: string;
+    periodStart: string;
+    periodEnd: string;
+    baselinePeriodId?: string | null;
+  },
+) {
+  const store = await getStore();
+  return store.createReportPeriod(clientId, {
+    periodKey: input.periodKey,
+    periodStart: input.periodStart,
+    periodEnd: input.periodEnd,
+    baselinePeriodId: input.baselinePeriodId ?? null,
+    manualInputs: emptyReportPeriodManualInputs(),
+  });
+}
+
+export async function updateReportPeriodRecord(
+  reportPeriodId: string,
+  input: Partial<{
+    baselinePeriodId: string | null;
+    status: ReportPeriodRecord["status"];
+    auditId: string | null;
+    generatedAt: string | null;
+    manualInputs: ReportPeriodRecord["manualInputs"];
+  }>,
+) {
+  const store = await getStore();
+  return store.updateReportPeriod(reportPeriodId, input);
+}
+
+export async function addContextEntryRecord(
+  reportPeriodId: string,
+  input: Pick<
+    ContextEntryRecord,
+    | "channel"
+    | "source"
+    | "campaignReference"
+    | "entryType"
+    | "text"
+    | "tags"
+    | "effectiveStartDate"
+    | "effectiveEndDate"
+  >,
+  author: Pick<AuthSession, "name" | "email">,
+) {
+  const store = await getStore();
+  return store.createContextEntry(reportPeriodId, {
+    ...input,
+    authorName: author.name,
+    authorEmail: author.email,
+  });
+}
+
+export async function deleteContextEntryRecord(id: string) {
+  const store = await getStore();
+  return store.deleteContextEntry(id);
+}
+
+export async function generateReportPeriod(reportPeriodId: string) {
+  const store = await getStore();
+  const reportPeriod = await store.getReportPeriod(reportPeriodId);
+  if (!reportPeriod) {
+    throw new Error("Report period not found.");
+  }
+  await store.updateReportPeriod(reportPeriodId, {
+    status: "queued",
+  });
+  try {
+    const audit = await createAuditForClient(reportPeriod.clientId, {
+      reportPeriodId: reportPeriod.id,
+      baselinePeriodId: reportPeriod.baselinePeriodId ?? undefined,
+      periodKey: reportPeriod.periodKey,
+      periodStart: reportPeriod.periodStart,
+      periodEnd: reportPeriod.periodEnd,
+    });
+    await store.updateReportPeriod(reportPeriodId, {
+      status: audit.status === "completed" ? "completed" : audit.status === "failed" ? "failed" : audit.status,
+      auditId: audit.id,
+      generatedAt: audit.completedAt,
+    });
+    return {
+      audit,
+      reportPeriod: (await store.getReportPeriod(reportPeriodId)) ?? reportPeriod,
+    };
+  } catch (error) {
+    await store.updateReportPeriod(reportPeriodId, {
+      status: "failed",
+      auditId: null,
+      generatedAt: null,
+    });
+    throw error;
+  }
+}
+
+export async function runMonthlyReportScheduler(
+  viewer: Pick<AuthSession, "role" | "accountId">,
+  now = new Date(),
+) {
+  const store = await getStore();
+  const clients = await store.listClients();
+  const visibleClients =
+    viewer.role === "platform_admin"
+      ? clients
+      : clients.filter((client) => client.accountId === viewer.accountId);
+  const actions: Array<{
+    clientId: string;
+    clientName: string;
+    periodKey: string | null;
+    status:
+      | "disabled"
+      | "missing_day"
+      | "not_due"
+      | "draft_created"
+      | "baseline_linked"
+      | "already_prepared"
+      | "generated"
+      | "failed";
+    reportPeriodId?: string;
+    reason?: string;
+  }> = [];
+  let scheduleJobsCreated = 0;
+  let reportPeriodsCreated = 0;
+  let reportsGenerated = 0;
+  let baselinesLinked = 0;
+
+  for (const client of visibleClients) {
+    if (!client.monthlyReportEnabled) {
+      actions.push({
+        clientId: client.id,
+        clientName: client.name,
+        periodKey: null,
+        status: "disabled",
+      });
+      continue;
+    }
+
+    if (client.monthlyReportDay == null) {
+      actions.push({
+        clientId: client.id,
+        clientName: client.name,
+        periodKey: null,
+        status: "missing_day",
+      });
+      continue;
+    }
+
+    const scheduledPeriod = resolveScheduledMonthlyPeriod(now, client.monthlyReportDay);
+    if (!scheduledPeriod) {
+      actions.push({
+        clientId: client.id,
+        clientName: client.name,
+        periodKey: null,
+        status: "not_due",
+      });
+      continue;
+    }
+
+    const scheduleJob = await store.createJob({
+      kind: "report_schedule",
+      payload: {
+        accountId: client.accountId,
+        clientId: client.id,
+        periodKey: scheduledPeriod.periodKey,
+      },
+    });
+    scheduleJobsCreated += 1;
+    await store.updateJob(scheduleJob.id, {
+      status: "running",
+      startedAt: new Date().toISOString(),
+    });
+
+    try {
+      const reportPeriods = await store.listReportPeriodsByClient(client.id);
+      const baselinePeriod = scheduledPeriod.baselinePeriodKey
+        ? reportPeriods.find((reportPeriod) => reportPeriod.periodKey === scheduledPeriod.baselinePeriodKey) ?? null
+        : null;
+      const existingPeriod =
+        reportPeriods.find((reportPeriod) => reportPeriod.periodKey === scheduledPeriod.periodKey) ?? null;
+      let reportPeriod = existingPeriod;
+      let created = false;
+      let baselineLinked = false;
+
+      if (!reportPeriod) {
+        reportPeriod = await store.createReportPeriod(client.id, {
+          periodKey: scheduledPeriod.periodKey,
+          periodStart: scheduledPeriod.periodStart,
+          periodEnd: scheduledPeriod.periodEnd,
+          baselinePeriodId: baselinePeriod?.id ?? null,
+          manualInputs: emptyReportPeriodManualInputs(),
+        });
+        reportPeriodsCreated += 1;
+        created = true;
+      } else if (!reportPeriod.baselinePeriodId && baselinePeriod) {
+        reportPeriod =
+          (await store.updateReportPeriod(reportPeriod.id, {
+            baselinePeriodId: baselinePeriod.id,
+          })) ?? reportPeriod;
+        baselinesLinked += 1;
+        baselineLinked = true;
+      }
+
+      let generated = false;
+      if (client.monthlyReportAutoGenerate && reportPeriod.status === "draft") {
+        await generateReportPeriod(reportPeriod.id);
+        reportsGenerated += 1;
+        generated = true;
+        reportPeriod = (await store.getReportPeriod(reportPeriod.id)) ?? reportPeriod;
+      }
+
+      await store.updateJob(scheduleJob.id, {
+        status: "completed",
+        result: {
+          periodKey: scheduledPeriod.periodKey,
+          reportPeriodId: reportPeriod.id,
+          created,
+          baselineLinked,
+          generated,
+          finalStatus: reportPeriod.status,
+        },
+        completedAt: new Date().toISOString(),
+      });
+      actions.push({
+        clientId: client.id,
+        clientName: client.name,
+        periodKey: scheduledPeriod.periodKey,
+        reportPeriodId: reportPeriod.id,
+        status: generated
+          ? "generated"
+          : created
+            ? "draft_created"
+            : baselineLinked
+              ? "baseline_linked"
+              : "already_prepared",
+      });
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : "Monthly report scheduler failed.";
+      await store.updateJob(scheduleJob.id, {
+        status: "failed",
+        errorMessage: reason,
+        completedAt: new Date().toISOString(),
+      });
+      actions.push({
+        clientId: client.id,
+        clientName: client.name,
+        periodKey: scheduledPeriod.periodKey,
+        status: "failed",
+        reason,
+      });
+    }
+  }
+
+  return {
+    runAt: now.toISOString(),
+    visibleClients: visibleClients.length,
+    scheduleJobsCreated,
+    reportPeriodsCreated,
+    reportsGenerated,
+    baselinesLinked,
+    actions,
+  };
+}
+
 export async function createIntegrationRecord(
   clientId: string,
   integration: Pick<
@@ -556,6 +987,15 @@ export async function createIntegrationRecord(
     "platformKey" | "platformType" | "displayName" | "credentials" | "settings"
   >,
 ) {
+  const store = await getStore();
+  const existing = (await store.listIntegrationsByClient(clientId)).find(
+    (item) => item.platformKey === integration.platformKey,
+  );
+  if (existing) {
+    throw new Error(
+      `Client already has a ${integration.platformKey} integration. Update the existing connection instead of creating a duplicate.`,
+    );
+  }
   return createIntegrationWithVault(clientId, integration);
 }
 

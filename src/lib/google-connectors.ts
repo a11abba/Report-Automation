@@ -15,6 +15,27 @@ import {
   verifyGa4PropertyAccess,
 } from "./google-analytics-api";
 import {
+  fetchBusinessProfileAccounts,
+  fetchBusinessProfileLocations,
+  fetchBusinessProfileSnapshot,
+  normalizeBusinessAccountId,
+  normalizeBusinessProfileId,
+  verifyBusinessProfileAccess,
+} from "./google-business-profile-api";
+import {
+  fetchGoogleAdsAccessibleCustomers,
+  fetchGoogleAdsSnapshot,
+  GoogleAdsApiError,
+  normalizeGoogleAdsCustomerId,
+  verifyGoogleAdsCustomerAccess,
+} from "./google-ads-api";
+import {
+  fetchSearchConsolePropertySummaries,
+  fetchSearchConsoleSnapshot,
+  normalizeSearchConsolePropertyId,
+  verifySearchConsolePropertyAccess,
+} from "./google-search-console-api";
+import {
   baseSnapshot,
   nowEvidence,
   type ConnectorContext,
@@ -42,8 +63,37 @@ function googleEnvironmentMessage(platformLabel: string) {
   return `${platformLabel} requires GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_OAUTH_REDIRECT_URI.`;
 }
 
+function googleAdsEnvironmentMessage() {
+  return "Google Ads requires GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_OAUTH_REDIRECT_URI, and GOOGLE_ADS_DEVELOPER_TOKEN.";
+}
+
 function ga4PropertySelectionMessage() {
   return "Enter a GA4 property ID before this integration can use live data.";
+}
+
+function searchConsolePropertySelectionMessage() {
+  return "Enter a Search Console property such as sc-domain:example.com or https://example.com/ before requesting live data.";
+}
+
+function businessProfileAccountSelectionMessage() {
+  return "Enter a Business Profile account ID such as accounts/123456789 before requesting live data.";
+}
+
+function hasGoogleAdsEnvironment() {
+  return Boolean(
+    process.env.GOOGLE_CLIENT_ID &&
+      process.env.GOOGLE_CLIENT_SECRET &&
+      process.env.GOOGLE_OAUTH_REDIRECT_URI &&
+      process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
+  );
+}
+
+function googleAdsDeveloperToken() {
+  return process.env.GOOGLE_ADS_DEVELOPER_TOKEN?.trim() ?? "";
+}
+
+function googleAdsCustomerSelectionMessage() {
+  return "Enter a Google Ads customer ID (for example, 123-456-7890 or 1234567890).";
 }
 
 function classifyGa4HealthError(error: unknown): ConnectorHealthCheckResult {
@@ -75,6 +125,84 @@ function classifyGa4HealthError(error: unknown): ConnectorHealthCheckResult {
     ok: false,
     code: "ga4_health_failed",
     message: error instanceof Error ? error.message : "GA4 health check failed.",
+  };
+}
+
+function classifySearchConsoleHealthError(error: unknown): ConnectorHealthCheckResult {
+  if (error instanceof GoogleApiError) {
+    if (error.status === 401) {
+      return {
+        ok: false,
+        code: "token_invalid",
+        message: "The Search Console token is no longer valid. Reconnect the Search Console integration.",
+      };
+    }
+    if (error.status === 403) {
+      return {
+        ok: false,
+        code: "permission_denied",
+        message: "The connected Google account does not have access to the selected Search Console property.",
+      };
+    }
+    if (error.status === 404) {
+      return {
+        ok: false,
+        code: "property_not_found",
+        message: "The selected Search Console property could not be found. Check the property value and try again.",
+      };
+    }
+    if (error.status === 400) {
+      return {
+        ok: false,
+        code: "invalid_request",
+        message: error.message,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    code: "search_console_health_failed",
+    message: error instanceof Error ? error.message : "Search Console health check failed.",
+  };
+}
+
+function classifyBusinessProfileHealthError(error: unknown): ConnectorHealthCheckResult {
+  if (error instanceof GoogleApiError) {
+    if (error.status === 401) {
+      return {
+        ok: false,
+        code: "token_invalid",
+        message: "The Business Profile token is no longer valid. Reconnect the Business Profile integration.",
+      };
+    }
+    if (error.status === 403) {
+      return {
+        ok: false,
+        code: "permission_denied",
+        message: "The connected Google account does not have access to the selected Business Profile account.",
+      };
+    }
+    if (error.status === 404) {
+      return {
+        ok: false,
+        code: "resource_not_found",
+        message: "The selected Business Profile account or location could not be found. Check the saved IDs and try again.",
+      };
+    }
+    if (error.status === 400) {
+      return {
+        ok: false,
+        code: "invalid_request",
+        message: error.message,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    code: "business_profile_health_failed",
+    message: error instanceof Error ? error.message : "Business Profile health check failed.",
   };
 }
 
@@ -207,6 +335,125 @@ function buildGa4DemoSnapshot(client: ConnectorContext["client"], integration: C
   return snapshot;
 }
 
+function buildGoogleAdsDemoSnapshot(
+  client: ConnectorContext["client"],
+  integration: ConnectorContext["integration"],
+) {
+  const snapshot = baseSnapshot(
+    client,
+    "google_ads",
+    "paid_media",
+    ["paid_media_performance"],
+  );
+  const adAccountId =
+    normalizeGoogleAdsCustomerId(integration.settings.googleAdsCustomerId) ?? "1234567890";
+  snapshot.paidMedia = withSupport("supported", {
+    adAccountId,
+    accountCurrency: "USD",
+    spend: 6240,
+    impressions: 168400,
+    reach: 0,
+    clicks: 4860,
+    ctr: 0.0289,
+    cpc: 1.28,
+    cpm: 37.05,
+    purchases: 88,
+    purchaseValue: 13920,
+    roas: 2.23,
+    topCampaigns: [
+      {
+        id: "1001",
+        name: "Brand Search",
+        status: "ENABLED",
+        spend: 1820,
+        impressions: 25200,
+        reach: 0,
+        clicks: 1480,
+        ctr: 0.0587,
+        cpc: 1.23,
+        cpm: 72.22,
+        purchases: 34,
+        purchaseValue: 5680,
+        roas: 3.12,
+      },
+      {
+        id: "1002",
+        name: "Non-Brand Search",
+        status: "ENABLED",
+        spend: 2940,
+        impressions: 97100,
+        reach: 0,
+        clicks: 2460,
+        ctr: 0.0253,
+        cpc: 1.19,
+        cpm: 30.28,
+        purchases: 39,
+        purchaseValue: 6020,
+        roas: 2.05,
+      },
+      {
+        id: "1003",
+        name: "Performance Max",
+        status: "ENABLED",
+        spend: 1480,
+        impressions: 46100,
+        reach: 0,
+        clicks: 920,
+        ctr: 0.02,
+        cpc: 1.61,
+        cpm: 32.1,
+        purchases: 15,
+        purchaseValue: 2220,
+        roas: 1.5,
+      },
+    ],
+  });
+  snapshot.sourceEvidence.push(
+    nowEvidence("google_ads", "paid_media", "Google Ads customer", "settings.googleAdsCustomerId", adAccountId),
+    nowEvidence(
+      "google_ads",
+      "paid_media",
+      "Google Ads login customer",
+      "settings.googleAdsLoginCustomerId",
+      normalizeGoogleAdsCustomerId(integration.settings.googleAdsLoginCustomerId),
+    ),
+  );
+  snapshot.operationalFlags.push("google_ads_demo_mode");
+  return snapshot;
+}
+
+function classifyGoogleAdsHealthError(error: unknown): ConnectorHealthCheckResult {
+  if (error instanceof GoogleAdsApiError) {
+    if (error.status === 401) {
+      return {
+        ok: false,
+        code: "token_invalid",
+        message: "The Google Ads token is no longer valid. Reconnect the Google Ads integration.",
+      };
+    }
+    if (error.status === 403) {
+      return {
+        ok: false,
+        code: "permission_denied",
+        message: "The connected Google account does not have access to the selected Google Ads customer.",
+      };
+    }
+    if (error.status === 400) {
+      return {
+        ok: false,
+        code: "invalid_request",
+        message: error.message,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    code: "google_ads_health_failed",
+    message: error instanceof Error ? error.message : "Google Ads health check failed.",
+  };
+}
+
 export class GoogleSearchConsoleConnector implements PlatformConnector {
   key = "google_search_console" as const;
 
@@ -221,7 +468,10 @@ export class GoogleSearchConsoleConnector implements PlatformConnector {
   async validateCredentials(integration: IntegrationRecord) {
     const environmentConfigured = hasGoogleOAuthEnvironment();
     const authenticated = hasOAuthToken(integration);
-    const resourceSelected = Boolean(integration.settings.propertyId);
+    const refreshTokenPresent = hasRefreshToken(integration);
+    const resourceSelected = Boolean(
+      normalizeSearchConsolePropertyId(integration.settings.propertyId),
+    );
     const demoMode = Boolean(integration.settings.demoMode);
 
     if (!environmentConfigured && !demoMode) {
@@ -242,7 +492,7 @@ export class GoogleSearchConsoleConnector implements PlatformConnector {
         valid: true,
         mode: "demo" as const,
         code: "demo_mode",
-        message: "Search Console is running in demo mode until the production adapter is completed.",
+        message: "Search Console is running in demo mode until OAuth, the refresh token, and the property are configured.",
         environmentConfigured,
         authenticated,
         resourceSelected,
@@ -263,20 +513,141 @@ export class GoogleSearchConsoleConnector implements PlatformConnector {
       };
     }
 
+    if (!refreshTokenPresent) {
+      return {
+        valid: false,
+        mode: "api" as const,
+        code: "refresh_token_missing",
+        message: "Reconnect Search Console so the app can refresh expired access tokens automatically.",
+        environmentConfigured,
+        authenticated,
+        resourceSelected,
+        liveReady: false,
+      };
+    }
+
+    if (!resourceSelected) {
+      return {
+        valid: false,
+        mode: "api" as const,
+        code: "property_required",
+        message: searchConsolePropertySelectionMessage(),
+        environmentConfigured,
+        authenticated,
+        resourceSelected,
+        liveReady: false,
+      };
+    }
+
     return {
       valid: true,
       mode: "api" as const,
-      code: "adapter_pending",
-      message: "OAuth is connected, but Search Console still uses a demo-backed snapshot until its live adapter is implemented.",
+      code: "ready_for_healthcheck",
+      message: "Search Console OAuth is connected. Run the health check to confirm property access.",
       environmentConfigured,
       authenticated,
       resourceSelected,
-      liveReady: false,
+      liveReady: true,
     };
   }
 
-  async fetchSnapshot(context: ConnectorContext): Promise<NormalizedBusinessSnapshot> {
-    return buildSearchConsoleDemoSnapshot(context.client, context.integration);
+  async discoverMetadata({ integration }: ConnectorContext) {
+    if (!integration.credentials.accessToken) {
+      return {};
+    }
+
+    const propertySummaries = await fetchSearchConsolePropertySummaries(
+      integration.credentials.accessToken,
+    );
+    return { propertySummaries };
+  }
+
+  async healthCheck(integration: IntegrationRecord) {
+    const property = normalizeSearchConsolePropertyId(integration.settings.propertyId);
+
+    if (!hasGoogleOAuthEnvironment()) {
+      return {
+        ok: false,
+        code: "env_missing",
+        message: googleEnvironmentMessage("Search Console"),
+      };
+    }
+
+    if (!integration.credentials.accessToken) {
+      return {
+        ok: false,
+        code: "oauth_required",
+        message: "Connect Search Console with Google OAuth before requesting live data.",
+      };
+    }
+
+    if (!integration.credentials.refreshToken) {
+      return {
+        ok: false,
+        code: "refresh_token_missing",
+        message: "Reconnect Search Console so the app can refresh expired access tokens automatically.",
+      };
+    }
+
+    if (!property) {
+      return {
+        ok: false,
+        code: "property_required",
+        message: searchConsolePropertySelectionMessage(),
+      };
+    }
+
+    try {
+      await verifySearchConsolePropertyAccess(integration.credentials.accessToken, property);
+      return {
+        ok: true,
+        code: "ok",
+        message: `Search Console property ${property} is ready for live reporting.`,
+      };
+    } catch (error) {
+      return classifySearchConsoleHealthError(error);
+    }
+  }
+
+  async fetchSnapshot({
+    client,
+    integration,
+    dateRange,
+  }: ConnectorContext): Promise<NormalizedBusinessSnapshot> {
+    const property = normalizeSearchConsolePropertyId(integration.settings.propertyId);
+    if (!integration.credentials.accessToken || !integration.credentials.refreshToken || !property) {
+      return buildSearchConsoleDemoSnapshot(client, integration);
+    }
+
+    const searchData = await fetchSearchConsoleSnapshot(
+      integration.credentials.accessToken,
+      client,
+      property,
+      dateRange,
+    );
+    const snapshot = baseSnapshot(client, this.key, this.platformType(), this.capabilities());
+    snapshot.sourceEvidence.push(
+      nowEvidence(this.key, this.platformType(), "Search Console property", "search.property", searchData.property),
+      nowEvidence(this.key, this.platformType(), "Search Console clicks", "search.clicks", searchData.clicks),
+      nowEvidence(
+        this.key,
+        this.platformType(),
+        "Search Console impressions",
+        "search.impressions",
+        searchData.impressions,
+      ),
+    );
+    snapshot.search = withSupport("supported", {
+      property: searchData.property,
+      clicks: searchData.clicks,
+      impressions: searchData.impressions,
+      ctr: searchData.ctr,
+      averagePosition: searchData.averagePosition,
+      brandedShare: searchData.brandedShare,
+      topQueries: searchData.topQueries,
+      topPages: searchData.topPages,
+    });
+    return snapshot;
   }
 }
 
@@ -294,8 +665,9 @@ export class GoogleBusinessProfileConnector implements PlatformConnector {
   async validateCredentials(integration: IntegrationRecord) {
     const environmentConfigured = hasGoogleOAuthEnvironment();
     const authenticated = hasOAuthToken(integration);
+    const refreshTokenPresent = hasRefreshToken(integration);
     const resourceSelected = Boolean(
-      integration.settings.businessAccountId || integration.settings.businessProfileId,
+      normalizeBusinessAccountId(integration.settings.businessAccountId),
     );
     const demoMode = Boolean(integration.settings.demoMode);
 
@@ -317,7 +689,7 @@ export class GoogleBusinessProfileConnector implements PlatformConnector {
         valid: true,
         mode: "demo" as const,
         code: "demo_mode",
-        message: "Business Profile is running in demo mode until the production adapter is completed.",
+        message: "Business Profile is running in demo mode until OAuth, the refresh token, and the account ID are configured.",
         environmentConfigured,
         authenticated,
         resourceSelected,
@@ -338,20 +710,173 @@ export class GoogleBusinessProfileConnector implements PlatformConnector {
       };
     }
 
+    if (!refreshTokenPresent) {
+      return {
+        valid: false,
+        mode: "api" as const,
+        code: "refresh_token_missing",
+        message: "Reconnect Business Profile so the app can refresh expired access tokens automatically.",
+        environmentConfigured,
+        authenticated,
+        resourceSelected,
+        liveReady: false,
+      };
+    }
+
+    if (!resourceSelected) {
+      return {
+        valid: false,
+        mode: "api" as const,
+        code: "business_account_required",
+        message: businessProfileAccountSelectionMessage(),
+        environmentConfigured,
+        authenticated,
+        resourceSelected,
+        liveReady: false,
+      };
+    }
+
     return {
       valid: true,
       mode: "api" as const,
-      code: "adapter_pending",
-      message: "OAuth is connected, but Business Profile still uses a demo-backed snapshot until its live adapter is implemented.",
+      code: "ready_for_healthcheck",
+      message: "Business Profile OAuth is connected. Run the health check to confirm account access.",
       environmentConfigured,
       authenticated,
       resourceSelected,
-      liveReady: false,
+      liveReady: true,
     };
   }
 
-  async fetchSnapshot(context: ConnectorContext): Promise<NormalizedBusinessSnapshot> {
-    return buildBusinessProfileDemoSnapshot(context.client, context.integration);
+  async discoverMetadata({ integration }: ConnectorContext) {
+    const accessToken = integration.credentials.accessToken;
+    if (!accessToken) {
+      return {};
+    }
+
+    const accountSummaries = await fetchBusinessProfileAccounts(accessToken);
+    const businessAccountId = normalizeBusinessAccountId(integration.settings.businessAccountId);
+    const selectedAccount = accountSummaries.find((item) => item.resourceName === businessAccountId);
+    const locationSummaries = businessAccountId
+      ? await fetchBusinessProfileLocations(
+          accessToken,
+          businessAccountId,
+          selectedAccount?.displayName ?? null,
+        )
+      : [];
+
+    return {
+      accountSummaries,
+      locationSummaries,
+    };
+  }
+
+  async healthCheck(integration: IntegrationRecord) {
+    const accessToken = integration.credentials.accessToken;
+    const businessAccountId = normalizeBusinessAccountId(integration.settings.businessAccountId);
+    const businessProfileId = normalizeBusinessProfileId(
+      integration.settings.businessProfileId,
+    );
+
+    if (!hasGoogleOAuthEnvironment()) {
+      return {
+        ok: false,
+        code: "env_missing",
+        message: googleEnvironmentMessage("Business Profile"),
+      };
+    }
+
+    if (!accessToken) {
+      return {
+        ok: false,
+        code: "oauth_required",
+        message: "Connect Business Profile with Google OAuth before requesting live data.",
+      };
+    }
+
+    if (!integration.credentials.refreshToken) {
+      return {
+        ok: false,
+        code: "refresh_token_missing",
+        message: "Reconnect Business Profile so the app can refresh expired access tokens automatically.",
+      };
+    }
+
+    if (!businessAccountId) {
+      return {
+        ok: false,
+        code: "business_account_required",
+        message: businessProfileAccountSelectionMessage(),
+      };
+    }
+
+    try {
+      const verification = await verifyBusinessProfileAccess(
+        accessToken,
+        businessAccountId,
+        businessProfileId,
+      );
+      return {
+        ok: true,
+        code: "ok",
+        message: businessProfileId
+          ? `Business Profile account ${verification.accountName} is ready with ${businessProfileId}.`
+          : `Business Profile account ${verification.accountName} is ready with ${verification.locationCount} accessible locations.`,
+      };
+    } catch (error) {
+      return classifyBusinessProfileHealthError(error);
+    }
+  }
+
+  async fetchSnapshot({
+    client,
+    integration,
+    dateRange,
+  }: ConnectorContext): Promise<NormalizedBusinessSnapshot> {
+    const accessToken = integration.credentials.accessToken;
+    const businessAccountId = normalizeBusinessAccountId(integration.settings.businessAccountId);
+    const businessProfileId = normalizeBusinessProfileId(
+      integration.settings.businessProfileId,
+    );
+
+    if (!accessToken || !integration.credentials.refreshToken || !businessAccountId) {
+      return buildBusinessProfileDemoSnapshot(client, integration);
+    }
+
+    const profileData = await fetchBusinessProfileSnapshot(accessToken, {
+      businessAccountId,
+      businessProfileId,
+      fallbackAccountName: integration.displayName,
+      dateRange,
+    });
+    const snapshot = baseSnapshot(client, this.key, this.platformType(), this.capabilities());
+    snapshot.sourceEvidence.push(
+      nowEvidence(
+        this.key,
+        this.platformType(),
+        "Business Profile account",
+        "localPresence.accountName",
+        profileData.localPresence.accountName,
+      ),
+      nowEvidence(
+        this.key,
+        this.platformType(),
+        "Business Profile locations",
+        "localPresence.locationCount",
+        profileData.localPresence.locationCount,
+      ),
+      nowEvidence(
+        this.key,
+        this.platformType(),
+        "Business Profile reviews",
+        "reputation.totalReviews",
+        profileData.reputation.totalReviews,
+      ),
+    );
+    snapshot.localPresence = profileData.localPresence;
+    snapshot.reputation = profileData.reputation;
+    snapshot.locations = profileData.locations;
+    return snapshot;
   }
 }
 
@@ -503,13 +1028,13 @@ export class GoogleAnalyticsConnector implements PlatformConnector {
     }
   }
 
-  async fetchSnapshot({ client, integration }: ConnectorContext): Promise<NormalizedBusinessSnapshot> {
+  async fetchSnapshot({ client, integration, dateRange }: ConnectorContext): Promise<NormalizedBusinessSnapshot> {
     const property = normalizeGa4PropertyId(integration.settings.ga4PropertyId);
     if (!integration.credentials.accessToken || !integration.credentials.refreshToken || !property) {
       return buildGa4DemoSnapshot(client, integration);
     }
 
-    const ga4 = await fetchGa4TrafficSnapshot(integration.credentials.accessToken, property);
+    const ga4 = await fetchGa4TrafficSnapshot(integration.credentials.accessToken, property, dateRange);
     const snapshot = baseSnapshot(client, this.key, this.platformType(), this.capabilities());
     snapshot.sourceEvidence.push(
       nowEvidence(this.key, this.platformType(), "GA4 property", "trafficAttribution.property", ga4.property),
@@ -526,6 +1051,216 @@ export class GoogleAnalyticsConnector implements PlatformConnector {
       topSourceMediums: ga4.topSourceMediums,
       topLandingPages: ga4.topLandingPages,
     });
+    return snapshot;
+  }
+}
+
+export class GoogleAdsConnector implements PlatformConnector {
+  key = "google_ads" as const;
+
+  platformType(): PlatformType {
+    return "paid_media";
+  }
+
+  capabilities(): AuditCapability[] {
+    return ["paid_media_performance"];
+  }
+
+  async validateCredentials(integration: IntegrationRecord) {
+    const environmentConfigured = hasGoogleAdsEnvironment();
+    const authenticated = hasOAuthToken(integration);
+    const refreshTokenPresent = hasRefreshToken(integration);
+    const resourceSelected = Boolean(
+      normalizeGoogleAdsCustomerId(integration.settings.googleAdsCustomerId),
+    );
+    const demoMode = Boolean(integration.settings.demoMode);
+
+    if (!environmentConfigured && !demoMode) {
+      return {
+        valid: false,
+        mode: "demo" as const,
+        code: "env_missing",
+        message: googleAdsEnvironmentMessage(),
+        environmentConfigured,
+        authenticated,
+        resourceSelected,
+        liveReady: false,
+      };
+    }
+
+    if (demoMode) {
+      return {
+        valid: true,
+        mode: "demo" as const,
+        code: "demo_mode",
+        message: "Google Ads is running in demo mode until OAuth, the developer token, and the customer ID are configured.",
+        environmentConfigured,
+        authenticated,
+        resourceSelected,
+        liveReady: false,
+      };
+    }
+
+    if (!authenticated) {
+      return {
+        valid: false,
+        mode: "demo" as const,
+        code: "oauth_required",
+        message: "Connect Google Ads with Google OAuth before requesting live paid media data.",
+        environmentConfigured,
+        authenticated,
+        resourceSelected,
+        liveReady: false,
+      };
+    }
+
+    if (!refreshTokenPresent) {
+      return {
+        valid: false,
+        mode: "api" as const,
+        code: "refresh_token_missing",
+        message: "Reconnect Google Ads so the app can refresh expired access tokens automatically.",
+        environmentConfigured,
+        authenticated,
+        resourceSelected,
+        liveReady: false,
+      };
+    }
+
+    if (!resourceSelected) {
+      return {
+        valid: false,
+        mode: "api" as const,
+        code: "customer_required",
+        message: googleAdsCustomerSelectionMessage(),
+        environmentConfigured,
+        authenticated,
+        resourceSelected,
+        liveReady: false,
+      };
+    }
+
+    return {
+      valid: true,
+      mode: "api" as const,
+      code: "ready_for_healthcheck",
+      message: "Google Ads OAuth is connected. Run the health check to confirm customer access.",
+      environmentConfigured,
+      authenticated,
+      resourceSelected,
+      liveReady: true,
+    };
+  }
+
+  async discoverMetadata({ integration }: ConnectorContext) {
+    const accessToken = integration.credentials.accessToken;
+    const developerToken = googleAdsDeveloperToken();
+    if (!accessToken || !developerToken) {
+      return {};
+    }
+
+    const customers = await fetchGoogleAdsAccessibleCustomers(accessToken, developerToken);
+    return {
+      propertySummaries: customers.map((customer) => ({
+        resourceName: `customers/${customer.customerId}`,
+        propertyId: customer.customerId,
+        displayName: customer.displayName,
+        parentAccountName: customer.currencyCode,
+      })),
+    };
+  }
+
+  async healthCheck(integration: IntegrationRecord) {
+    const accessToken = integration.credentials.accessToken;
+    const customerId = normalizeGoogleAdsCustomerId(integration.settings.googleAdsCustomerId);
+    const loginCustomerId = normalizeGoogleAdsCustomerId(
+      integration.settings.googleAdsLoginCustomerId,
+    );
+    const developerToken = googleAdsDeveloperToken();
+
+    if (!hasGoogleAdsEnvironment()) {
+      return {
+        ok: false,
+        code: "env_missing",
+        message: googleAdsEnvironmentMessage(),
+      };
+    }
+
+    if (!accessToken) {
+      return {
+        ok: false,
+        code: "oauth_required",
+        message: "Connect Google Ads with Google OAuth before requesting live data.",
+      };
+    }
+
+    if (!integration.credentials.refreshToken) {
+      return {
+        ok: false,
+        code: "refresh_token_missing",
+        message: "Reconnect Google Ads so the app can refresh expired access tokens automatically.",
+      };
+    }
+
+    if (!customerId) {
+      return {
+        ok: false,
+        code: "customer_required",
+        message: googleAdsCustomerSelectionMessage(),
+      };
+    }
+
+    if (!developerToken) {
+      return {
+        ok: false,
+        code: "developer_token_missing",
+        message: googleAdsEnvironmentMessage(),
+      };
+    }
+
+    try {
+      const customer = await verifyGoogleAdsCustomerAccess(
+        accessToken,
+        developerToken,
+        customerId,
+        loginCustomerId,
+      );
+      return {
+        ok: true,
+        code: "ok",
+        message: `Google Ads customer ${customer.customerId} (${customer.displayName}) is ready for live reporting.`,
+      };
+    } catch (error) {
+      return classifyGoogleAdsHealthError(error);
+    }
+  }
+
+  async fetchSnapshot({ client, integration, dateRange }: ConnectorContext): Promise<NormalizedBusinessSnapshot> {
+    const accessToken = integration.credentials.accessToken;
+    const customerId = normalizeGoogleAdsCustomerId(integration.settings.googleAdsCustomerId);
+    const loginCustomerId = normalizeGoogleAdsCustomerId(
+      integration.settings.googleAdsLoginCustomerId,
+    );
+    const developerToken = googleAdsDeveloperToken();
+
+    if (!accessToken || !integration.credentials.refreshToken || !customerId || !developerToken) {
+      return buildGoogleAdsDemoSnapshot(client, integration);
+    }
+
+    const paidMedia = await fetchGoogleAdsSnapshot(
+      accessToken,
+      developerToken,
+      customerId,
+      loginCustomerId,
+      dateRange,
+    );
+    const snapshot = baseSnapshot(client, this.key, this.platformType(), this.capabilities());
+    snapshot.sourceEvidence.push(
+      nowEvidence(this.key, this.platformType(), "Google Ads customer", "paidMedia.adAccountId", paidMedia.adAccountId),
+      nowEvidence(this.key, this.platformType(), "Google Ads spend", "paidMedia.spend", paidMedia.spend),
+      nowEvidence(this.key, this.platformType(), "Google Ads conversions", "paidMedia.purchases", paidMedia.purchases),
+    );
+    snapshot.paidMedia = paidMedia;
     return snapshot;
   }
 }

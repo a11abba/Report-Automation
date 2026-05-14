@@ -111,6 +111,27 @@ export function renderReportHtml(report: AuditReportPayload): string {
     )
     .join("");
 
+  const renderNarrativeList = (items: AuditReportPayload["dataFacts"]) =>
+    items.length === 0
+      ? `<p>${escapeHtml(labels.healthyBaseline)}</p>`
+      : `<div class="findings">${items
+          .map(
+            (item) => `
+              <article class="finding info">
+                <div class="finding-meta">
+                  <span>${escapeHtml(item.title)}</span>
+                </div>
+                <p>${escapeHtml(item.detail)}</p>
+                ${item.evidence.length ? `<ul>${item.evidence.map((evidence) => `<li>${escapeHtml(evidence)}</li>`).join("")}</ul>` : ""}
+              </article>
+            `,
+          )
+          .join("")}</div>`;
+
+  const periodLabel = report.reportPeriod.periodKey
+    ? `${report.reportPeriod.periodKey}${report.reportPeriod.periodStart && report.reportPeriod.periodEnd ? ` (${report.reportPeriod.periodStart} → ${report.reportPeriod.periodEnd})` : ""}`
+    : "Ad hoc";
+
   return `
     <!DOCTYPE html>
     <html lang="${report.locale}">
@@ -138,6 +159,8 @@ export function renderReportHtml(report: AuditReportPayload): string {
           <h1>${escapeHtml(report.clientName)}</h1>
           <p>${escapeHtml(report.clientIndustryLabel)} • ${escapeHtml(report.snapshot.platformLabels.join(", "))}</p>
           <p>${escapeHtml(labels.reportFocus)}: ${escapeHtml(getReportFocusLabel(report.locale, report.reportFocus))}</p>
+          <p>${escapeHtml(labels.reportPeriod)}: ${escapeHtml(periodLabel)}</p>
+          ${report.reportPeriod.baselinePeriodKey ? `<p>${escapeHtml(labels.baselinePeriod)}: ${escapeHtml(report.reportPeriod.baselinePeriodKey)}</p>` : ""}
           <p>${escapeHtml(labels.generated)} ${escapeHtml(new Date(report.generatedAt).toLocaleString(report.locale))}</p>
         </section>
         <section class="grid">
@@ -199,6 +222,32 @@ export function renderReportHtml(report: AuditReportPayload): string {
           <p>${escapeHtml(labels.ga4ConversionRate)}: ${formatPercent(report.locale, report.snapshot.trafficAttribution?.conversionRate)}</p>
           <p>${escapeHtml(labels.websitePerformanceScore)}: ${report.snapshot.website?.pageSpeedScore ?? "N/A"}</p>
           <p>${escapeHtml(labels.campaignOpenRate)}: ${formatPercent(report.locale, report.snapshot.campaigns?.metrics.openRate.value as number | null | undefined)}</p>
+        </section>
+        <section class="card" style="margin-top: 20px;">
+          <h2>${escapeHtml(labels.dataFacts)}</h2>
+          ${renderNarrativeList(report.dataFacts)}
+        </section>
+        <section class="card" style="margin-top: 20px;">
+          <h2>${escapeHtml(labels.providedContext)}</h2>
+          ${renderNarrativeList(report.providedContext)}
+        </section>
+        <section class="card" style="margin-top: 20px;">
+          <h2>${escapeHtml(labels.hypotheses)}</h2>
+          ${renderNarrativeList(report.hypotheses)}
+        </section>
+        <section class="card" style="margin-top: 20px;">
+          <h2>${escapeHtml(labels.recommendationsNarrative)}</h2>
+          ${renderNarrativeList(report.recommendations)}
+        </section>
+        <section class="card" style="margin-top: 20px;">
+          <h2>${escapeHtml(labels.confidenceNotes)}</h2>
+          ${renderNarrativeList(
+            report.confidenceNotes.map((note) => ({
+              title: note.label,
+              detail: note.detail,
+              evidence: [note.level],
+            })),
+          )}
         </section>
         <section class="findings">${findings}</section>
       </body>

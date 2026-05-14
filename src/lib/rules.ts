@@ -2,9 +2,11 @@ import {
   type AuditFinding,
   type AuditReportPayload,
   type ClientRecord,
+  type ContextEntryRecord,
   type LocationScore,
   type NormalizedBusinessSnapshot,
   type ReportFocus,
+  type ReportPeriodRecord,
   type RulePackMetadata,
   type SectionScore,
 } from "@/lib/audit/types";
@@ -14,6 +16,7 @@ import {
   localizeLocationNotes,
   localizeSectionScoreLabel,
 } from "./report-i18n";
+import { buildNarrativeSections } from "./report-narrative";
 import { getCategoriesForReportFocus } from "./report-focus";
 
 const severityPenalty: Record<AuditFinding["severity"], number> = {
@@ -241,19 +244,31 @@ export function evaluateRules(snapshot: NormalizedBusinessSnapshot): AuditFindin
   }
 
   if (snapshot.localPresence) {
-    if ((snapshot.localPresence.averageCompletionRate ?? 0) < 0.85) {
+    if (
+      snapshot.localPresence.averageCompletionRate != null &&
+      snapshot.localPresence.averageCompletionRate < 0.85
+    ) {
       pushFinding(findings, { code: "local.completion", sectionKey: "business_profile", category: "local_presence_health", section: "", severity: "high", status: "failing", params: { averageCompletionRate: snapshot.localPresence.averageCompletionRate ?? 0 }, sourcePlatforms: ["google_business_profile"] });
     }
-    if ((snapshot.localPresence.photoCoverageRate ?? 0) < 0.6) {
+    if (
+      snapshot.localPresence.photoCoverageRate != null &&
+      snapshot.localPresence.photoCoverageRate < 0.6
+    ) {
       pushFinding(findings, { code: "local.photos", sectionKey: "business_profile", category: "local_presence_health", section: "", severity: "medium", status: "watch", params: { photoCoverageRate: snapshot.localPresence.photoCoverageRate ?? 0 }, sourcePlatforms: ["google_business_profile"] });
     }
   }
 
   if (snapshot.reputation) {
-    if ((snapshot.reputation.averageRating ?? 5) < 4.2) {
+    if (
+      snapshot.reputation.averageRating != null &&
+      snapshot.reputation.averageRating < 4.2
+    ) {
       pushFinding(findings, { code: "reviews.rating", sectionKey: "review_reputation", category: "reviews_reputation", section: "", severity: "high", status: "watch", params: { averageRating: Number((snapshot.reputation.averageRating ?? 0).toFixed(1)).toString() }, sourcePlatforms: ["google_business_profile"] });
     }
-    if ((snapshot.reputation.responseRate ?? 1) < 0.7) {
+    if (
+      snapshot.reputation.responseRate != null &&
+      snapshot.reputation.responseRate < 0.7
+    ) {
       pushFinding(findings, { code: "reviews.response", sectionKey: "review_reputation", category: "reviews_reputation", section: "", severity: "medium", status: "watch", params: { responseRate: snapshot.reputation.responseRate ?? 0 }, sourcePlatforms: ["google_business_profile"] });
     }
   }
@@ -461,7 +476,12 @@ export function buildReport(
   client: ClientRecord,
   snapshot: NormalizedBusinessSnapshot,
   findings: AuditFinding[],
-  execution: AuditReportPayload["execution"],
+  options: {
+    execution: AuditReportPayload["execution"];
+    reportPeriod?: ReportPeriodRecord | null;
+    baselineReport?: AuditReportPayload | null;
+    contextEntries?: ContextEntryRecord[];
+  },
 ): AuditReportPayload {
   const locale = client.reportLanguage;
   const relevantCategories = getCategoriesForReportFocus(client.reportFocus);
@@ -482,6 +502,33 @@ export function buildReport(
   }));
   const topRisks = localizedFindings.filter((finding) => finding.status !== "passing").slice(0, 3).map((finding) => finding.summary);
   const strengths = localizedFindings.filter((finding) => finding.status === "passing").slice(0, 3).map((finding) => finding.summary);
+  const reportPeriod = options.reportPeriod
+    ? {
+        id: options.reportPeriod.id,
+        periodKey: options.reportPeriod.periodKey,
+        periodStart: options.reportPeriod.periodStart,
+        periodEnd: options.reportPeriod.periodEnd,
+        baselinePeriodId: options.reportPeriod.baselinePeriodId,
+        baselinePeriodKey: options.baselineReport?.reportPeriod.periodKey ?? null,
+        manualInputs: options.reportPeriod.manualInputs,
+      }
+    : {
+        id: null,
+        periodKey: null,
+        periodStart: null,
+        periodEnd: null,
+        baselinePeriodId: null,
+        baselinePeriodKey: null,
+        manualInputs: null,
+      };
+  const narrative = buildNarrativeSections({
+    locale,
+    snapshot,
+    findings: localizedFindings,
+    reportPeriod,
+    baselineReport: options.baselineReport ?? null,
+    contextEntries: options.contextEntries ?? [],
+  });
 
   return {
     accountId: client.accountId,
@@ -500,10 +547,16 @@ export function buildReport(
       strengths,
       locationCount: snapshot.locations.length,
     },
-    execution,
+    reportPeriod,
+    execution: options.execution,
     sectionScores: localizedSectionScores,
     locationScores: localizedLocationScores,
     findings: localizedFindings,
+    dataFacts: narrative.dataFacts,
+    providedContext: narrative.providedContext,
+    hypotheses: narrative.hypotheses,
+    recommendations: narrative.recommendations,
+    confidenceNotes: narrative.confidenceNotes,
     snapshot,
   };
 }

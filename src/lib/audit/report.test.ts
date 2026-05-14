@@ -14,6 +14,9 @@ const client: ClientRecord = {
   primaryDomain: "https://aurora.example",
   reportLanguage: "pt-PT",
   reportFocus: "full_funnel",
+  monthlyReportEnabled: false,
+  monthlyReportDay: null,
+  monthlyReportAutoGenerate: true,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
@@ -70,12 +73,14 @@ describe("report rendering", () => {
     );
     const merged = mergeSnapshots(client, snapshots);
     const report = buildReport("audit_pdf", client, merged, evaluateRules(merged), {
-      includedIntegrations: integrations.map((integration) => ({
-        id: integration.id,
-        label: integration.displayName,
-        platformKey: integration.platformKey,
-      })),
-      excludedIntegrations: [],
+      execution: {
+        includedIntegrations: integrations.map((integration) => ({
+          id: integration.id,
+          label: integration.displayName,
+          platformKey: integration.platformKey,
+        })),
+        excludedIntegrations: [],
+      },
     });
     const html = renderReportHtml(report);
 
@@ -107,12 +112,14 @@ describe("report rendering", () => {
     );
     const merged = mergeSnapshots(englishClient, snapshots);
     const report = buildReport("audit_pdf_en", englishClient, merged, evaluateRules(merged), {
-      includedIntegrations: integrations.map((integration) => ({
-        id: integration.id,
-        label: integration.displayName,
-        platformKey: integration.platformKey,
-      })),
-      excludedIntegrations: [],
+      execution: {
+        includedIntegrations: integrations.map((integration) => ({
+          id: integration.id,
+          label: integration.displayName,
+          platformKey: integration.platformKey,
+        })),
+        excludedIntegrations: [],
+      },
     });
     const html = renderReportHtml(report);
 

@@ -1,9 +1,11 @@
 import path from "node:path";
 
-const defaultDataDir = path.join(/* turbopackIgnore: true */ process.cwd(), "data");
-
 export function getAuditDataDir() {
-  return path.resolve(process.env.AUDIT_DATA_DIR || defaultDataDir);
+  const configuredDataDir = process.env.AUDIT_DATA_DIR?.trim();
+  if (configuredDataDir) {
+    return path.resolve(configuredDataDir);
+  }
+  return path.join(/*turbopackIgnore: true*/ process.cwd(), "data");
 }
 
 export function getAuditDataFile(...segments: string[]) {

@@ -1,7 +1,23 @@
-import type { AuthSession, AppLocale } from "@/lib/auth-session";
-import type { AccountMembershipRecord, AuditRecord, ClientRecord, IntegrationRecord, LocationRecord } from "@/lib/audit/types";
-import { hasOperatorAccess } from "@/lib/operator-access";
-import { getStore } from "@/lib/storage";
+import type { AuthSession, AppLocale } from "./auth-session";
+import type { AccountMembershipRecord, AuditRecord, ClientRecord, IntegrationRecord, LocationRecord } from "./audit/types";
+import { hasOperatorAccess } from "./operator-access";
+import {
+  canAccessAccount as canAccessAccountRole,
+  canManageCustomerAccount as canManageCustomerAccountRole,
+  canManagePlatform as canManagePlatformRole,
+  canViewAccountBilling as canViewAccountBillingRole,
+  isPlatformRole,
+  normalizeAppRole,
+  pickCustomerLoginMembership,
+} from "./role-access";
+import { getStore } from "./storage";
+
+export {
+  getRoleLabel,
+  normalizeAppRole,
+  pickCustomerLoginMembership,
+  type EffectiveAppRole,
+} from "./role-access";
 
 interface GoogleProfileInput {
   sub: string;
@@ -17,7 +33,7 @@ async function ensurePlatformAdminMembership(userId: string, email: string) {
   const existing = memberships.find(
     (membership) =>
       membership.accountId === account.id &&
-      membership.role === "platform_admin" &&
+      isPlatformRole(membership.role) &&
       membership.status !== "revoked",
   );
   if (existing) {
@@ -59,13 +75,9 @@ export async function createSessionFromGoogleLogin(
     };
   }
 
-  const invitedMemberships = (await store.getMembershipsForEmail(profile.email)).filter(
-    (membership) => membership.status !== "revoked",
+  const membership = pickCustomerLoginMembership(
+    await store.getMembershipsForEmail(profile.email),
   );
-  const membership = invitedMemberships[0];
-  if (!membership) {
-    throw new Error("This Google account has not been invited to an account yet.");
-  }
 
   const activated =
     membership.userId === user.id && membership.status === "active"
@@ -79,7 +91,7 @@ export async function createSessionFromGoogleLogin(
     userId: user.id,
     accountId: activated.accountId,
     membershipId: activated.id,
-    role: activated.role,
+    role: normalizeAppRole(activated.role),
     sub: profile.sub,
     email: user.email,
     name: user.name,
@@ -88,7 +100,7 @@ export async function createSessionFromGoogleLogin(
   };
 }
 
-export async function validateAuthSession(session?: AuthSession | null) {
+export async function validateAuthSession(session?: AuthSession | null): Promise<AuthSession | null> {
   if (!session?.userId || !session.email || !session.accountId || !session.role) {
     return null;
   }
@@ -99,7 +111,7 @@ export async function validateAuthSession(session?: AuthSession | null) {
     return null;
   }
 
-  if (session.role === "platform_admin") {
+  if (isPlatformRole(session.role)) {
     const membership = session.membershipId ? await store.getMembership(session.membershipId) : null;
     const bootstrapAllowed = hasOperatorAccess(session.email);
     if (
@@ -107,13 +119,14 @@ export async function validateAuthSession(session?: AuthSession | null) {
       (!membership ||
         membership.userId !== user.id ||
         membership.accountId !== session.accountId ||
-        membership.role !== "platform_admin" ||
+        !isPlatformRole(membership.role) ||
         membership.status !== "active")
     ) {
       return null;
     }
     return {
       ...session,
+      role: "platform_admin",
       email: user.email,
       name: user.name,
       picture: user.picture,
@@ -130,7 +143,7 @@ export async function validateAuthSession(session?: AuthSession | null) {
     !membership ||
     membership.userId !== user.id ||
     membership.accountId !== session.accountId ||
-    membership.role !== session.role ||
+    normalizeAppRole(membership.role) !== normalizeAppRole(session.role) ||
     membership.status !== "active"
   ) {
     return null;
@@ -138,6 +151,7 @@ export async function validateAuthSession(session?: AuthSession | null) {
 
   return {
     ...session,
+    role: normalizeAppRole(membership.role),
     email: user.email,
     name: user.name,
     picture: user.picture,
@@ -146,11 +160,25 @@ export async function validateAuthSession(session?: AuthSession | null) {
 }
 
 export function canAccessAccount(session: Pick<AuthSession, "role" | "accountId">, accountId: string) {
-  return session.role === "platform_admin" || session.accountId === accountId;
+  return canAccessAccountRole(session, accountId);
 }
 
 export function canManagePlatform(session: Pick<AuthSession, "role">) {
-  return session.role === "platform_admin";
+  return canManagePlatformRole(session);
+}
+
+export function canManageCustomerAccount(
+  session: Pick<AuthSession, "role" | "accountId">,
+  accountId: string,
+) {
+  return canManageCustomerAccountRole(session, accountId);
+}
+
+export function canViewAccountBilling(
+  session: Pick<AuthSession, "role" | "accountId">,
+  accountId: string,
+) {
+  return canViewAccountBillingRole(session, accountId);
 }
 
 export function canManageClientRecord(

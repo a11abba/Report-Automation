@@ -8,12 +8,14 @@ import type {
   AuditRecord,
   AuditReportPayload,
   ClientRecord,
+  ContextEntryRecord,
   IntegrationRecord,
   JobKind,
   JobRecord,
   JobStatus,
   LocationRecord,
   OAuthSessionRecord,
+  ReportPeriodRecord,
   UserRecord,
 } from "@/lib/audit/types";
 import { getAuditDataFile } from "@/lib/runtime-paths";
@@ -44,6 +46,20 @@ function hydrateReport(report: AuditReportPayload): AuditReportPayload {
       includedIntegrations: [],
       excludedIntegrations: [],
     },
+    reportPeriod: report.reportPeriod ?? {
+      id: null,
+      periodKey: null,
+      periodStart: null,
+      periodEnd: null,
+      baselinePeriodId: null,
+      baselinePeriodKey: null,
+      manualInputs: null,
+    },
+    dataFacts: report.dataFacts ?? [],
+    providedContext: report.providedContext ?? [],
+    hypotheses: report.hypotheses ?? [],
+    recommendations: report.recommendations ?? [],
+    confidenceNotes: report.confidenceNotes ?? [],
     findings: (report.findings ?? []).map((finding) => ({
       ...finding,
       severityLabel: finding.severityLabel ?? String(finding.severity ?? ""),
@@ -63,8 +79,6 @@ function parseJson<T>(value: T | string | null | undefined, fallback: T): T {
     return fallback;
   }
 }
-
-const bootstrapSqliteFile = getAuditDataFile("app.db");
 
 export class PostgresStore implements AppStore {
   private pool: Pool;
@@ -130,6 +144,9 @@ export class PostgresStore implements AppStore {
         primary_domain text null,
         report_language text not null default 'pt-BR',
         report_focus text not null default 'full_funnel',
+        monthly_report_enabled boolean not null default false,
+        monthly_report_day integer null,
+        monthly_report_auto_generate boolean not null default true,
         created_at timestamptz not null,
         updated_at timestamptz not null
       );
@@ -172,6 +189,40 @@ export class PostgresStore implements AppStore {
         completed_at timestamptz null,
         error_message text null
       );
+      create table if not exists report_periods (
+        id text primary key,
+        account_id text not null references accounts(id) on delete cascade,
+        client_id text not null references clients(id) on delete cascade,
+        period_key text not null,
+        period_start text not null,
+        period_end text not null,
+        baseline_period_id text null references report_periods(id) on delete set null,
+        status text not null,
+        audit_id text null references audits(id) on delete set null,
+        manual_inputs jsonb not null,
+        generated_at timestamptz null,
+        created_at timestamptz not null,
+        updated_at timestamptz not null,
+        unique (client_id, period_key)
+      );
+      create table if not exists context_entries (
+        id text primary key,
+        account_id text not null references accounts(id) on delete cascade,
+        client_id text not null references clients(id) on delete cascade,
+        report_period_id text not null references report_periods(id) on delete cascade,
+        channel text null,
+        source text null,
+        campaign_reference text null,
+        entry_type text not null,
+        text text not null,
+        tags jsonb not null,
+        effective_start_date text null,
+        effective_end_date text null,
+        author_name text not null,
+        author_email text not null,
+        created_at timestamptz not null,
+        updated_at timestamptz not null
+      );
       create table if not exists audit_reports (
         audit_id text primary key references audits(id) on delete cascade,
         payload jsonb not null
@@ -210,6 +261,11 @@ export class PostgresStore implements AppStore {
         started_at timestamptz null,
         completed_at timestamptz null
       );
+    `);
+    await this.pool.query(`
+      alter table clients add column if not exists monthly_report_enabled boolean not null default false;
+      alter table clients add column if not exists monthly_report_day integer null;
+      alter table clients add column if not exists monthly_report_auto_generate boolean not null default true;
     `);
 
     await this.ensurePlatformAccount();
@@ -279,6 +335,13 @@ export class PostgresStore implements AppStore {
       primaryDomain: (row.primary_domain as string | null) ?? null,
       reportLanguage: row.report_language as ClientRecord["reportLanguage"],
       reportFocus: row.report_focus as ClientRecord["reportFocus"],
+      monthlyReportEnabled: Boolean(row.monthly_report_enabled),
+      monthlyReportDay:
+        row.monthly_report_day == null ? null : Number(row.monthly_report_day),
+      monthlyReportAutoGenerate:
+        row.monthly_report_auto_generate == null
+          ? true
+          : Boolean(row.monthly_report_auto_generate),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -310,6 +373,54 @@ export class PostgresStore implements AppStore {
       landingPageUrl: (row.landing_page_url as string | null) ?? null,
       metrics: parseJson<LocationRecord["metrics"]>(row.metrics as string | LocationRecord["metrics"], {}),
       findings: parseJson<LocationRecord["findings"]>(row.findings as string | LocationRecord["findings"], []),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapReportPeriod(row: Record<string, unknown>): ReportPeriodRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      clientId: String(row.client_id),
+      periodKey: String(row.period_key),
+      periodStart: String(row.period_start),
+      periodEnd: String(row.period_end),
+      baselinePeriodId: (row.baseline_period_id as string | null) ?? null,
+      status: row.status as ReportPeriodRecord["status"],
+      auditId: (row.audit_id as string | null) ?? null,
+      manualInputs: parseJson<ReportPeriodRecord["manualInputs"]>(
+        row.manual_inputs as string | ReportPeriodRecord["manualInputs"],
+        {
+          leads: null,
+          qualifiedLeads: null,
+          sales: null,
+          revenue: null,
+          notes: null,
+        },
+      ),
+      generatedAt: (row.generated_at as string | null) ?? null,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapContextEntry(row: Record<string, unknown>): ContextEntryRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      clientId: String(row.client_id),
+      reportPeriodId: String(row.report_period_id),
+      channel: (row.channel as string | null) ?? null,
+      source: (row.source as string | null) ?? null,
+      campaignReference: (row.campaign_reference as string | null) ?? null,
+      entryType: row.entry_type as ContextEntryRecord["entryType"],
+      text: String(row.text),
+      tags: parseJson<ContextEntryRecord["tags"]>(row.tags as string | ContextEntryRecord["tags"], []),
+      effectiveStartDate: (row.effective_start_date as string | null) ?? null,
+      effectiveEndDate: (row.effective_end_date as string | null) ?? null,
+      authorName: String(row.author_name),
+      authorEmail: String(row.author_email),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -417,13 +528,13 @@ export class PostgresStore implements AppStore {
     }
 
     try {
-      await access(bootstrapSqliteFile);
+      await access(getAuditDataFile("app.db"));
     } catch {
       return;
     }
 
     const platformAccount = await this.ensurePlatformAccount();
-    const sqlite = new DatabaseSync(bootstrapSqliteFile);
+    const sqlite = new DatabaseSync(getAuditDataFile("app.db"));
     const clientRows = sqlite.prepare("select * from clients").all<Record<string, unknown>>();
     if (clientRows.length === 0) {
       return;
@@ -434,8 +545,23 @@ export class PostgresStore implements AppStore {
       try {
         for (const row of clientRows) {
           await client.query(
-            `insert into clients (id, account_id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, created_at, updated_at)
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            `insert into clients (
+              id,
+              account_id,
+              name,
+              industry,
+              industry_label_pt,
+              operating_model,
+              primary_domain,
+              report_language,
+              report_focus,
+              monthly_report_enabled,
+              monthly_report_day,
+              monthly_report_auto_generate,
+              created_at,
+              updated_at
+            )
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
              on conflict (id) do nothing`,
             [
               String(row.id),
@@ -447,6 +573,11 @@ export class PostgresStore implements AppStore {
               (row.primary_domain as string | null) ?? null,
               (row.report_language as string | null) ?? "pt-BR",
               (row.report_focus as string | null) ?? "full_funnel",
+              Boolean(row.monthly_report_enabled),
+              row.monthly_report_day == null ? null : Number(row.monthly_report_day),
+              row.monthly_report_auto_generate == null
+                ? true
+                : Boolean(row.monthly_report_auto_generate),
               String(row.created_at),
               String(row.updated_at),
             ],
@@ -713,24 +844,42 @@ export class PostgresStore implements AppStore {
       id: createId("client"),
       accountId,
       ...input,
+      monthlyReportEnabled: false,
+      monthlyReportDay: null,
+      monthlyReportAutoGenerate: true,
       createdAt: now,
       updatedAt: now,
     };
     await this.pool.query(
-      `insert into clients (id, account_id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, created_at, updated_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [clientRecord.id, clientRecord.accountId, clientRecord.name, clientRecord.industry, clientRecord.industryLabelPt, clientRecord.operatingModel, clientRecord.primaryDomain, clientRecord.reportLanguage, clientRecord.reportFocus, clientRecord.createdAt, clientRecord.updatedAt],
+      `insert into clients (
+        id,
+        account_id,
+        name,
+        industry,
+        industry_label_pt,
+        operating_model,
+        primary_domain,
+        report_language,
+        report_focus,
+        monthly_report_enabled,
+        monthly_report_day,
+        monthly_report_auto_generate,
+        created_at,
+        updated_at
+      )
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [clientRecord.id, clientRecord.accountId, clientRecord.name, clientRecord.industry, clientRecord.industryLabelPt, clientRecord.operatingModel, clientRecord.primaryDomain, clientRecord.reportLanguage, clientRecord.reportFocus, clientRecord.monthlyReportEnabled, clientRecord.monthlyReportDay, clientRecord.monthlyReportAutoGenerate, clientRecord.createdAt, clientRecord.updatedAt],
     );
     return clientRecord;
   }
 
-  async updateClient(id: string, patch: Partial<Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus">>) {
+  async updateClient(id: string, patch: Partial<Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus" | "monthlyReportEnabled" | "monthlyReportDay" | "monthlyReportAutoGenerate">>) {
     const current = await this.getClient(id);
     if (!current) return null;
     const next: ClientRecord = { ...current, ...patch, updatedAt: new Date().toISOString() };
     await this.pool.query(
-      `update clients set name = $1, industry = $2, industry_label_pt = $3, operating_model = $4, primary_domain = $5, report_language = $6, report_focus = $7, updated_at = $8 where id = $9`,
-      [next.name, next.industry, next.industryLabelPt, next.operatingModel, next.primaryDomain, next.reportLanguage, next.reportFocus, next.updatedAt, id],
+      `update clients set name = $1, industry = $2, industry_label_pt = $3, operating_model = $4, primary_domain = $5, report_language = $6, report_focus = $7, monthly_report_enabled = $8, monthly_report_day = $9, monthly_report_auto_generate = $10, updated_at = $11 where id = $12`,
+      [next.name, next.industry, next.industryLabelPt, next.operatingModel, next.primaryDomain, next.reportLanguage, next.reportFocus, next.monthlyReportEnabled, next.monthlyReportDay, next.monthlyReportAutoGenerate, next.updatedAt, id],
     );
     return next;
   }
@@ -873,6 +1022,186 @@ export class PostgresStore implements AppStore {
   async getReport(auditId: string) {
     const result = await this.pool.query<{ payload: AuditReportPayload }>("select payload from audit_reports where audit_id = $1 limit 1", [auditId]);
     return result.rows[0]?.payload ? hydrateReport(result.rows[0].payload) : null;
+  }
+
+  async listReportPeriodsByClient(clientId: string) {
+    const result = await this.pool.query(
+      "select * from report_periods where client_id = $1 order by period_start desc, created_at desc",
+      [clientId],
+    );
+    return result.rows.map((row) => this.mapReportPeriod(row));
+  }
+
+  async getReportPeriod(id: string) {
+    const result = await this.pool.query("select * from report_periods where id = $1 limit 1", [id]);
+    return result.rows[0] ? this.mapReportPeriod(result.rows[0]) : null;
+  }
+
+  async createReportPeriod(
+    clientId: string,
+    input: Pick<
+      ReportPeriodRecord,
+      "periodKey" | "periodStart" | "periodEnd" | "baselinePeriodId" | "manualInputs"
+    >,
+  ) {
+    const clientRecord = await this.getClient(clientId);
+    if (!clientRecord) throw new Error(`Client ${clientId} not found.`);
+    const duplicate = await this.pool.query(
+      "select 1 from report_periods where client_id = $1 and period_key = $2 limit 1",
+      [clientId, input.periodKey],
+    );
+    if (duplicate.rows[0]) {
+      throw new Error(`A monthly report period already exists for ${input.periodKey}.`);
+    }
+    const now = new Date().toISOString();
+    const reportPeriod: ReportPeriodRecord = {
+      id: createId("period"),
+      accountId: clientRecord.accountId,
+      clientId,
+      periodKey: input.periodKey,
+      periodStart: input.periodStart,
+      periodEnd: input.periodEnd,
+      baselinePeriodId: input.baselinePeriodId,
+      status: "draft",
+      auditId: null,
+      manualInputs: input.manualInputs,
+      generatedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.pool.query(
+      `insert into report_periods (id, account_id, client_id, period_key, period_start, period_end, baseline_period_id, status, audit_id, manual_inputs, generated_at, created_at, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)`,
+      [
+        reportPeriod.id,
+        reportPeriod.accountId,
+        reportPeriod.clientId,
+        reportPeriod.periodKey,
+        reportPeriod.periodStart,
+        reportPeriod.periodEnd,
+        reportPeriod.baselinePeriodId,
+        reportPeriod.status,
+        reportPeriod.auditId,
+        JSON.stringify(reportPeriod.manualInputs),
+        reportPeriod.generatedAt,
+        reportPeriod.createdAt,
+        reportPeriod.updatedAt,
+      ],
+    );
+    return reportPeriod;
+  }
+
+  async updateReportPeriod(
+    id: string,
+    patch: Partial<
+      Pick<ReportPeriodRecord, "baselinePeriodId" | "status" | "auditId" | "manualInputs" | "generatedAt">
+    >,
+  ) {
+    const current = await this.getReportPeriod(id);
+    if (!current) return null;
+    const next: ReportPeriodRecord = {
+      ...current,
+      ...patch,
+      manualInputs: patch.manualInputs ?? current.manualInputs,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.pool.query(
+      `update report_periods
+       set baseline_period_id = $1, status = $2, audit_id = $3, manual_inputs = $4::jsonb, generated_at = $5, updated_at = $6
+       where id = $7`,
+      [
+        next.baselinePeriodId,
+        next.status,
+        next.auditId,
+        JSON.stringify(next.manualInputs),
+        next.generatedAt,
+        next.updatedAt,
+        id,
+      ],
+    );
+    return next;
+  }
+
+  async getContextEntry(id: string) {
+    const result = await this.pool.query("select * from context_entries where id = $1 limit 1", [id]);
+    return result.rows[0] ? this.mapContextEntry(result.rows[0]) : null;
+  }
+
+  async listContextEntriesByReportPeriod(reportPeriodId: string) {
+    const result = await this.pool.query(
+      "select * from context_entries where report_period_id = $1 order by created_at desc",
+      [reportPeriodId],
+    );
+    return result.rows.map((row) => this.mapContextEntry(row));
+  }
+
+  async createContextEntry(
+    reportPeriodId: string,
+    input: Pick<
+      ContextEntryRecord,
+      | "channel"
+      | "source"
+      | "campaignReference"
+      | "entryType"
+      | "text"
+      | "tags"
+      | "effectiveStartDate"
+      | "effectiveEndDate"
+      | "authorName"
+      | "authorEmail"
+    >,
+  ) {
+    const reportPeriod = await this.getReportPeriod(reportPeriodId);
+    if (!reportPeriod) throw new Error(`Report period ${reportPeriodId} not found.`);
+    const now = new Date().toISOString();
+    const entry: ContextEntryRecord = {
+      id: createId("ctx"),
+      accountId: reportPeriod.accountId,
+      clientId: reportPeriod.clientId,
+      reportPeriodId,
+      channel: input.channel,
+      source: input.source,
+      campaignReference: input.campaignReference,
+      entryType: input.entryType,
+      text: input.text,
+      tags: input.tags,
+      effectiveStartDate: input.effectiveStartDate,
+      effectiveEndDate: input.effectiveEndDate,
+      authorName: input.authorName,
+      authorEmail: input.authorEmail,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.pool.query(
+      `insert into context_entries (id, account_id, client_id, report_period_id, channel, source, campaign_reference, entry_type, text, tags, effective_start_date, effective_end_date, author_name, author_email, created_at, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15,$16)`,
+      [
+        entry.id,
+        entry.accountId,
+        entry.clientId,
+        entry.reportPeriodId,
+        entry.channel,
+        entry.source,
+        entry.campaignReference,
+        entry.entryType,
+        entry.text,
+        JSON.stringify(entry.tags),
+        entry.effectiveStartDate,
+        entry.effectiveEndDate,
+        entry.authorName,
+        entry.authorEmail,
+        entry.createdAt,
+        entry.updatedAt,
+      ],
+    );
+    return entry;
+  }
+
+  async deleteContextEntry(id: string) {
+    const current = await this.getContextEntry(id);
+    if (!current) return null;
+    await this.pool.query("delete from context_entries where id = $1", [id]);
+    return current;
   }
 
   async createOAuthSession(input: Omit<OAuthSessionRecord, "createdAt">) {

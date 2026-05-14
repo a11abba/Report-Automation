@@ -14,6 +14,7 @@ import {
 } from "@/lib/audit/types";
 import {
   GoogleAnalyticsConnector,
+  GoogleAdsConnector,
   GoogleBusinessProfileConnector,
   GoogleSearchConsoleConnector,
 } from "./google-connectors";
@@ -36,6 +37,10 @@ export interface ConnectorContext {
   client: ClientRecord;
   integration: IntegrationRecord;
   requestedCapabilities: AuditCapability[];
+  dateRange?: {
+    startDate: string;
+    endDate: string;
+  };
 }
 
 export interface PlatformConnector {
@@ -142,6 +147,7 @@ const connectors: Record<PlatformKey, PlatformConnector> = {
   google_search_console: new GoogleSearchConsoleConnector(),
   google_business_profile: new GoogleBusinessProfileConnector(),
   google_analytics: new GoogleAnalyticsConnector(),
+  google_ads: new GoogleAdsConnector(),
   microsoft_ads: new MicrosoftAdsConnector(),
   microsoft_merchant_center: new MicrosoftMerchantCenterConnector(),
   pagespeed_insights: new PageSpeedConnector(),
@@ -203,6 +209,15 @@ export const platformCatalog: PlatformDefinition[] = [
     capabilities: connectors.google_analytics.capabilities(),
     authModes: ["oauth", "service_account", "none"],
     description: "Traffic quality, channel mix, landing pages, and conversion performance.",
+  },
+  {
+    key: "google_ads",
+    type: "paid_media",
+    name: "Google Ads",
+    launchStage: "live",
+    capabilities: connectors.google_ads.capabilities(),
+    authModes: ["oauth"],
+    description: "Paid search and Performance Max reporting with spend, click, conversion, and campaign diagnostics.",
   },
   {
     key: "microsoft_ads",

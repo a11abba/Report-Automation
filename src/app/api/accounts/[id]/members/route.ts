@@ -6,7 +6,7 @@ import { requireRouteViewer } from "@/lib/route-auth";
 
 const inviteMemberSchema = z.object({
   email: z.string().email(),
-  role: z.enum(["platform_admin", "account_user"]).default("account_user"),
+  role: z.enum(["account_admin", "account_operator"]).default("account_operator"),
 });
 
 export async function POST(

@@ -4,7 +4,6 @@ import {
   getSessionCookieOptions,
   readAuthSessionValue,
 } from "@/lib/auth-session";
-import { validateAuthSession } from "@/lib/auth-access";
 
 function isPublicPath(pathname: string) {
   return (
@@ -21,14 +20,14 @@ export async function proxy(request: NextRequest) {
   const rawSession = await readAuthSessionValue(
     request.cookies.get(AUTH_SESSION_COOKIE)?.value,
   );
-  const session = await validateAuthSession(rawSession);
-  const hasAuthorizedSession = Boolean(session);
+  const hasSessionCandidate = Boolean(
+    rawSession?.userId &&
+      rawSession.email &&
+      rawSession.accountId &&
+      rawSession.role,
+  );
 
-  if (hasAuthorizedSession && pathname === "/login") {
-    return NextResponse.redirect(new URL("/", request.url));
-  }
-
-  if (!hasAuthorizedSession && rawSession) {
+  if (!hasSessionCandidate && rawSession) {
     const response = isPublicPath(pathname)
       ? NextResponse.next()
       : pathname.startsWith("/api/")
@@ -38,7 +37,7 @@ export async function proxy(request: NextRequest) {
     return response;
   }
 
-  if (hasAuthorizedSession || isPublicPath(pathname)) {
+  if (isPublicPath(pathname) || hasSessionCandidate) {
     return NextResponse.next();
   }
 
@@ -55,6 +54,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!_next/static|_next/image|_next/webpack-hmr|__nextjs_font|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)",
   ],
 };

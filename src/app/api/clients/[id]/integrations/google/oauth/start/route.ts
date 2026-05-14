@@ -8,6 +8,7 @@ const schema = z.object({
     "google_search_console",
     "google_business_profile",
     "google_analytics",
+    "google_ads",
   ]),
 });
 

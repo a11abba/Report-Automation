@@ -50,7 +50,7 @@ export async function POST(request: Request) {
       invitation = await store.inviteAccountUser({
         accountId: account.id,
         invitedEmail: body.primaryUserEmail,
-        role: "account_user",
+        role: "account_admin",
         invitedByUserId: viewer.userId,
       });
     }

@@ -7,12 +7,14 @@ import {
   type AuditRecord,
   type AuditReportPayload,
   type ClientRecord,
+  type ContextEntryRecord,
   type IntegrationRecord,
   type JobKind,
   type JobRecord,
   type JobStatus,
   type LocationRecord,
   type OAuthSessionRecord,
+  type ReportPeriodRecord,
   type UserRecord,
 } from "@/lib/audit/types";
 import { getAuditDataDir, getAuditDataFile } from "@/lib/runtime-paths";
@@ -35,6 +37,20 @@ function hydrateReport(report: AuditReportPayload): AuditReportPayload {
       includedIntegrations: [],
       excludedIntegrations: [],
     },
+    reportPeriod: report.reportPeriod ?? {
+      id: null,
+      periodKey: null,
+      periodStart: null,
+      periodEnd: null,
+      baselinePeriodId: null,
+      baselinePeriodKey: null,
+      manualInputs: null,
+    },
+    dataFacts: report.dataFacts ?? [],
+    providedContext: report.providedContext ?? [],
+    hypotheses: report.hypotheses ?? [],
+    recommendations: report.recommendations ?? [],
+    confidenceNotes: report.confidenceNotes ?? [],
     findings: (report.findings ?? []).map((finding) => ({
       ...finding,
       severityLabel: finding.severityLabel ?? String(finding.severity ?? ""),
@@ -99,7 +115,7 @@ export interface AppStore {
     patch: Partial<
       Pick<
         ClientRecord,
-        "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus"
+        "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus" | "monthlyReportEnabled" | "monthlyReportDay" | "monthlyReportAutoGenerate"
       >
     >,
   ): Promise<ClientRecord | null>;
@@ -129,6 +145,40 @@ export interface AppStore {
   updateAudit(id: string, patch: Partial<AuditRecord>): Promise<AuditRecord | null>;
   saveReport(auditId: string, report: AuditReportPayload): Promise<void>;
   getReport(auditId: string): Promise<AuditReportPayload | null>;
+  listReportPeriodsByClient(clientId: string): Promise<ReportPeriodRecord[]>;
+  getReportPeriod(id: string): Promise<ReportPeriodRecord | null>;
+  createReportPeriod(
+    clientId: string,
+    input: Pick<
+      ReportPeriodRecord,
+      "periodKey" | "periodStart" | "periodEnd" | "baselinePeriodId" | "manualInputs"
+    >,
+  ): Promise<ReportPeriodRecord>;
+  updateReportPeriod(
+    id: string,
+    patch: Partial<
+      Pick<ReportPeriodRecord, "baselinePeriodId" | "status" | "auditId" | "manualInputs" | "generatedAt">
+    >,
+  ): Promise<ReportPeriodRecord | null>;
+  getContextEntry(id: string): Promise<ContextEntryRecord | null>;
+  listContextEntriesByReportPeriod(reportPeriodId: string): Promise<ContextEntryRecord[]>;
+  createContextEntry(
+    reportPeriodId: string,
+    input: Pick<
+      ContextEntryRecord,
+      | "channel"
+      | "source"
+      | "campaignReference"
+      | "entryType"
+      | "text"
+      | "tags"
+      | "effectiveStartDate"
+      | "effectiveEndDate"
+      | "authorName"
+      | "authorEmail"
+    >,
+  ): Promise<ContextEntryRecord>;
+  deleteContextEntry(id: string): Promise<ContextEntryRecord | null>;
   createOAuthSession(input: Omit<OAuthSessionRecord, "createdAt">): Promise<OAuthSessionRecord>;
   getOAuthSession(id: string): Promise<OAuthSessionRecord | null>;
   deleteOAuthSession(id: string): Promise<void>;
@@ -141,10 +191,6 @@ export interface AppStore {
   ): Promise<JobRecord | null>;
   listJobs(filter?: { kind?: JobKind; status?: JobStatus }): Promise<JobRecord[]>;
 }
-
-const dataDir = getAuditDataDir();
-const sqliteFile = getAuditDataFile("app.db");
-const legacyJsonFile = getAuditDataFile("app-db.json");
 
 function createId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 18)}`;
@@ -170,7 +216,7 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
 
 async function legacyStoreExists() {
   try {
-    await access(legacyJsonFile);
+    await access(getAuditDataFile("app-db.json"));
     return true;
   } catch {
     return false;
@@ -181,7 +227,7 @@ async function readLegacyStore(): Promise<LegacyStoreShape | null> {
   if (!(await legacyStoreExists())) {
     return null;
   }
-  const raw = await readFile(legacyJsonFile, "utf-8");
+  const raw = await readFile(getAuditDataFile("app-db.json"), "utf-8");
   const parsed = JSON.parse(raw) as Partial<LegacyStoreShape>;
   return {
     clients: parsed.clients ?? [],
@@ -255,6 +301,9 @@ class SQLiteStore implements AppStore {
         primary_domain text,
         report_language text not null,
         report_focus text not null default 'full_funnel',
+        monthly_report_enabled integer not null default 0,
+        monthly_report_day integer,
+        monthly_report_auto_generate integer not null default 1,
         created_at text not null,
         updated_at text not null
       );
@@ -296,6 +345,40 @@ class SQLiteStore implements AppStore {
         updated_at text not null,
         completed_at text,
         error_message text
+      );
+      create table if not exists report_periods (
+        id text primary key,
+        account_id text not null,
+        client_id text not null,
+        period_key text not null,
+        period_start text not null,
+        period_end text not null,
+        baseline_period_id text,
+        status text not null,
+        audit_id text,
+        manual_inputs text not null,
+        generated_at text,
+        created_at text not null,
+        updated_at text not null
+      );
+      create unique index if not exists report_periods_client_period_key on report_periods (client_id, period_key);
+      create table if not exists context_entries (
+        id text primary key,
+        account_id text not null,
+        client_id text not null,
+        report_period_id text not null,
+        channel text,
+        source text,
+        campaign_reference text,
+        entry_type text not null,
+        text text not null,
+        tags text not null,
+        effective_start_date text,
+        effective_end_date text,
+        author_name text not null,
+        author_email text not null,
+        created_at text not null,
+        updated_at text not null
       );
       create table if not exists audit_reports (
         audit_id text primary key,
@@ -359,6 +442,15 @@ class SQLiteStore implements AppStore {
     }
     if (!this.hasColumn("jobs", "account_id")) {
       this.db.exec("alter table jobs add column account_id text;");
+    }
+    if (!this.hasColumn("clients", "monthly_report_enabled")) {
+      this.db.exec("alter table clients add column monthly_report_enabled integer not null default 0;");
+    }
+    if (!this.hasColumn("clients", "monthly_report_day")) {
+      this.db.exec("alter table clients add column monthly_report_day integer;");
+    }
+    if (!this.hasColumn("clients", "monthly_report_auto_generate")) {
+      this.db.exec("alter table clients add column monthly_report_auto_generate integer not null default 1;");
     }
   }
 
@@ -489,6 +581,13 @@ class SQLiteStore implements AppStore {
       primaryDomain: (row.primary_domain as string | null) ?? null,
       reportLanguage: (row.report_language as ClientRecord["reportLanguage"]) ?? "pt-BR",
       reportFocus: (row.report_focus as ClientRecord["reportFocus"]) ?? "full_funnel",
+      monthlyReportEnabled: Boolean(row.monthly_report_enabled),
+      monthlyReportDay:
+        row.monthly_report_day == null ? null : Number(row.monthly_report_day),
+      monthlyReportAutoGenerate:
+        row.monthly_report_auto_generate == null
+          ? true
+          : Boolean(row.monthly_report_auto_generate),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -520,6 +619,51 @@ class SQLiteStore implements AppStore {
       landingPageUrl: (row.landing_page_url as string | null) ?? null,
       metrics: parseJson(String(row.metrics), {}),
       findings: parseJson(String(row.findings), []),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapReportPeriod(row: Record<string, unknown>): ReportPeriodRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      clientId: String(row.client_id),
+      periodKey: String(row.period_key),
+      periodStart: String(row.period_start),
+      periodEnd: String(row.period_end),
+      baselinePeriodId: (row.baseline_period_id as string | null) ?? null,
+      status: row.status as ReportPeriodRecord["status"],
+      auditId: (row.audit_id as string | null) ?? null,
+      manualInputs: parseJson(String(row.manual_inputs), {
+        leads: null,
+        qualifiedLeads: null,
+        sales: null,
+        revenue: null,
+        notes: null,
+      }),
+      generatedAt: (row.generated_at as string | null) ?? null,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapContextEntry(row: Record<string, unknown>): ContextEntryRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      clientId: String(row.client_id),
+      reportPeriodId: String(row.report_period_id),
+      channel: (row.channel as string | null) ?? null,
+      source: (row.source as string | null) ?? null,
+      campaignReference: (row.campaign_reference as string | null) ?? null,
+      entryType: row.entry_type as ContextEntryRecord["entryType"],
+      text: String(row.text),
+      tags: parseJson(String(row.tags), []),
+      effectiveStartDate: (row.effective_start_date as string | null) ?? null,
+      effectiveEndDate: (row.effective_end_date as string | null) ?? null,
+      authorName: String(row.author_name),
+      authorEmail: String(row.author_email),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -972,12 +1116,30 @@ class SQLiteStore implements AppStore {
       id: createId("client"),
       accountId,
       ...input,
+      monthlyReportEnabled: false,
+      monthlyReportDay: null,
+      monthlyReportAutoGenerate: true,
       createdAt: now,
       updatedAt: now,
     };
     this.db.prepare(`
-      insert into clients (id, account_id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      insert into clients (
+        id,
+        account_id,
+        name,
+        industry,
+        industry_label_pt,
+        operating_model,
+        primary_domain,
+        report_language,
+        report_focus,
+        monthly_report_enabled,
+        monthly_report_day,
+        monthly_report_auto_generate,
+        created_at,
+        updated_at
+      )
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       client.id,
       client.accountId,
@@ -988,6 +1150,9 @@ class SQLiteStore implements AppStore {
       client.primaryDomain,
       client.reportLanguage,
       client.reportFocus,
+      client.monthlyReportEnabled ? 1 : 0,
+      client.monthlyReportDay,
+      client.monthlyReportAutoGenerate ? 1 : 0,
       client.createdAt,
       client.updatedAt,
     );
@@ -996,7 +1161,7 @@ class SQLiteStore implements AppStore {
 
   async updateClient(
     id: string,
-    patch: Partial<Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus">>,
+    patch: Partial<Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus" | "monthlyReportEnabled" | "monthlyReportDay" | "monthlyReportAutoGenerate">>,
   ) {
     const current = await this.getClient(id);
     if (!current) return null;
@@ -1007,7 +1172,7 @@ class SQLiteStore implements AppStore {
     };
     this.db.prepare(`
       update clients
-      set name = ?, industry = ?, industry_label_pt = ?, operating_model = ?, primary_domain = ?, report_language = ?, report_focus = ?, updated_at = ?
+      set name = ?, industry = ?, industry_label_pt = ?, operating_model = ?, primary_domain = ?, report_language = ?, report_focus = ?, monthly_report_enabled = ?, monthly_report_day = ?, monthly_report_auto_generate = ?, updated_at = ?
       where id = ?
     `).run(
       next.name,
@@ -1017,6 +1182,9 @@ class SQLiteStore implements AppStore {
       next.primaryDomain,
       next.reportLanguage,
       next.reportFocus,
+      next.monthlyReportEnabled ? 1 : 0,
+      next.monthlyReportDay,
+      next.monthlyReportAutoGenerate ? 1 : 0,
       next.updatedAt,
       id,
     );
@@ -1048,6 +1216,8 @@ class SQLiteStore implements AppStore {
       }
     }
 
+    this.db.prepare("delete from context_entries where client_id = ?").run(id);
+    this.db.prepare("delete from report_periods where client_id = ?").run(id);
     this.db.prepare("delete from oauth_sessions where client_id = ?").run(id);
     this.db.prepare("delete from locations where client_id = ?").run(id);
     this.db.prepare("delete from integrations where client_id = ?").run(id);
@@ -1270,6 +1440,192 @@ class SQLiteStore implements AppStore {
     return row?.payload ? hydrateReport(JSON.parse(row.payload) as AuditReportPayload) : null;
   }
 
+  async listReportPeriodsByClient(clientId: string) {
+    await this.ensureMigrated();
+    return this.db
+      .prepare("select * from report_periods where client_id = ? order by period_start desc, created_at desc")
+      .all<Record<string, unknown>>(clientId)
+      .map((row) => this.mapReportPeriod(row));
+  }
+
+  async getReportPeriod(id: string) {
+    await this.ensureMigrated();
+    const row = this.db.prepare("select * from report_periods where id = ?").get<Record<string, unknown>>(id);
+    return row ? this.mapReportPeriod(row) : null;
+  }
+
+  async createReportPeriod(
+    clientId: string,
+    input: Pick<
+      ReportPeriodRecord,
+      "periodKey" | "periodStart" | "periodEnd" | "baselinePeriodId" | "manualInputs"
+    >,
+  ) {
+    await this.ensureMigrated();
+    const client = await this.getClient(clientId);
+    if (!client) {
+      throw new Error(`Client ${clientId} not found.`);
+    }
+    const existing = this.db
+      .prepare("select * from report_periods where client_id = ? and period_key = ?")
+      .get<Record<string, unknown>>(clientId, input.periodKey);
+    if (existing) {
+      throw new Error(`A monthly report period already exists for ${input.periodKey}.`);
+    }
+
+    const now = new Date().toISOString();
+    const reportPeriod: ReportPeriodRecord = {
+      id: createId("period"),
+      accountId: client.accountId,
+      clientId,
+      periodKey: input.periodKey,
+      periodStart: input.periodStart,
+      periodEnd: input.periodEnd,
+      baselinePeriodId: input.baselinePeriodId,
+      status: "draft",
+      auditId: null,
+      manualInputs: input.manualInputs,
+      generatedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db.prepare(`
+      insert into report_periods (id, account_id, client_id, period_key, period_start, period_end, baseline_period_id, status, audit_id, manual_inputs, generated_at, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      reportPeriod.id,
+      reportPeriod.accountId,
+      reportPeriod.clientId,
+      reportPeriod.periodKey,
+      reportPeriod.periodStart,
+      reportPeriod.periodEnd,
+      reportPeriod.baselinePeriodId,
+      reportPeriod.status,
+      reportPeriod.auditId,
+      JSON.stringify(reportPeriod.manualInputs),
+      reportPeriod.generatedAt,
+      reportPeriod.createdAt,
+      reportPeriod.updatedAt,
+    );
+    return reportPeriod;
+  }
+
+  async updateReportPeriod(
+    id: string,
+    patch: Partial<
+      Pick<ReportPeriodRecord, "baselinePeriodId" | "status" | "auditId" | "manualInputs" | "generatedAt">
+    >,
+  ) {
+    const current = await this.getReportPeriod(id);
+    if (!current) return null;
+    const next: ReportPeriodRecord = {
+      ...current,
+      ...patch,
+      manualInputs: patch.manualInputs ?? current.manualInputs,
+      updatedAt: new Date().toISOString(),
+    };
+    this.db.prepare(`
+      update report_periods
+      set baseline_period_id = ?, status = ?, audit_id = ?, manual_inputs = ?, generated_at = ?, updated_at = ?
+      where id = ?
+    `).run(
+      next.baselinePeriodId,
+      next.status,
+      next.auditId,
+      JSON.stringify(next.manualInputs),
+      next.generatedAt,
+      next.updatedAt,
+      id,
+    );
+    return next;
+  }
+
+  async getContextEntry(id: string) {
+    await this.ensureMigrated();
+    const row = this.db.prepare("select * from context_entries where id = ?").get<Record<string, unknown>>(id);
+    return row ? this.mapContextEntry(row) : null;
+  }
+
+  async listContextEntriesByReportPeriod(reportPeriodId: string) {
+    await this.ensureMigrated();
+    return this.db
+      .prepare("select * from context_entries where report_period_id = ? order by created_at desc")
+      .all<Record<string, unknown>>(reportPeriodId)
+      .map((row) => this.mapContextEntry(row));
+  }
+
+  async createContextEntry(
+    reportPeriodId: string,
+    input: Pick<
+      ContextEntryRecord,
+      | "channel"
+      | "source"
+      | "campaignReference"
+      | "entryType"
+      | "text"
+      | "tags"
+      | "effectiveStartDate"
+      | "effectiveEndDate"
+      | "authorName"
+      | "authorEmail"
+    >,
+  ) {
+    await this.ensureMigrated();
+    const reportPeriod = await this.getReportPeriod(reportPeriodId);
+    if (!reportPeriod) {
+      throw new Error(`Report period ${reportPeriodId} not found.`);
+    }
+    const now = new Date().toISOString();
+    const entry: ContextEntryRecord = {
+      id: createId("ctx"),
+      accountId: reportPeriod.accountId,
+      clientId: reportPeriod.clientId,
+      reportPeriodId,
+      channel: input.channel,
+      source: input.source,
+      campaignReference: input.campaignReference,
+      entryType: input.entryType,
+      text: input.text,
+      tags: input.tags,
+      effectiveStartDate: input.effectiveStartDate,
+      effectiveEndDate: input.effectiveEndDate,
+      authorName: input.authorName,
+      authorEmail: input.authorEmail,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db.prepare(`
+      insert into context_entries (id, account_id, client_id, report_period_id, channel, source, campaign_reference, entry_type, text, tags, effective_start_date, effective_end_date, author_name, author_email, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      entry.id,
+      entry.accountId,
+      entry.clientId,
+      entry.reportPeriodId,
+      entry.channel,
+      entry.source,
+      entry.campaignReference,
+      entry.entryType,
+      entry.text,
+      JSON.stringify(entry.tags),
+      entry.effectiveStartDate,
+      entry.effectiveEndDate,
+      entry.authorName,
+      entry.authorEmail,
+      entry.createdAt,
+      entry.updatedAt,
+    );
+    return entry;
+  }
+
+  async deleteContextEntry(id: string) {
+    await this.ensureMigrated();
+    const current = await this.getContextEntry(id);
+    if (!current) return null;
+    this.db.prepare("delete from context_entries where id = ?").run(id);
+    return current;
+  }
+
   async createOAuthSession(input: Omit<OAuthSessionRecord, "createdAt">) {
     await this.ensureMigrated();
     const session: OAuthSessionRecord = {
@@ -1427,8 +1783,8 @@ export async function getStore(): Promise<AppStore> {
         const { PostgresStore } = await import("@/lib/postgres-store");
         return new PostgresStore(databaseUrl);
       }
-      await mkdir(dataDir, { recursive: true });
-      return new SQLiteStore(sqliteFile);
+      await mkdir(getAuditDataDir(), { recursive: true });
+      return new SQLiteStore(getAuditDataFile("app.db"));
     })();
   }
   return storePromise;

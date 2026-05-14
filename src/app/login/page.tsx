@@ -19,9 +19,9 @@ const copy = {
     tag: "Workspace access",
     panelTag: "Login",
     panelTitle: "Shared SaaS access",
-    title: "Google login now handles both platform admins and invited customers.",
+    title: "Google login now handles platform admins, client admins, and client operators.",
     body:
-      "Use your Google account to enter the main workspace. Platform admins can bootstrap the product, and invited customer users can access only their own account.",
+      "Use your Google account to enter the shared workspace. Platform admins manage provisioning, client admins handle customer access and billing visibility, and invited client operators stay inside their own operational workspace.",
     ctaTop: "Continue with Google",
     ctaBottom: "Sign in with Google",
     note: "The same callback also powers the Google platform connections inside each client workspace.",
@@ -40,9 +40,9 @@ const copy = {
     tag: "Acesso ao workspace",
     panelTag: "Acesso",
     panelTitle: "Acesso SaaS compartilhado",
-    title: "O login com Google agora atende admins da plataforma e clientes convidados.",
+    title: "O login com Google agora atende admins da plataforma, admins do cliente e operadores do cliente.",
     body:
-      "Use a sua conta Google para entrar no workspace principal. Os admins podem iniciar a plataforma, e os clientes convidados veem apenas a própria conta.",
+      "Use a sua conta Google para entrar no workspace compartilhado. Os admins da plataforma fazem o provisionamento, os admins do cliente gerem acesso e visibilidade financeira, e os operadores convidados ficam apenas no workspace operacional da própria conta.",
     ctaTop: "Entrar com Google",
     ctaBottom: "Fazer login com Google",
     note: "O mesmo callback também alimenta as conexões das plataformas Google dentro de cada workspace de cliente.",

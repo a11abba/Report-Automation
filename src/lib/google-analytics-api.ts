@@ -187,8 +187,19 @@ export async function verifyGa4PropertyAccess(accessToken: string, property: str
   });
 }
 
-export async function fetchGa4TrafficSnapshot(accessToken: string, property: string): Promise<Ga4TrafficSnapshot> {
-  const dateRanges = [{ startDate: "30daysAgo", endDate: "yesterday" }];
+export async function fetchGa4TrafficSnapshot(
+  accessToken: string,
+  property: string,
+  dateRange?: {
+    startDate: string;
+    endDate: string;
+  },
+): Promise<Ga4TrafficSnapshot> {
+  const dateRanges = [
+    dateRange
+      ? { startDate: dateRange.startDate, endDate: dateRange.endDate }
+      : { startDate: "30daysAgo", endDate: "yesterday" },
+  ];
   const [summaryReport, channelReport, sourceMediumReport, landingPageReport] = await Promise.all([
     runGa4Report(accessToken, property, {
       dateRanges,

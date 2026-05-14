@@ -59,3 +59,53 @@ export async function loadIntegrationForViewer(
   }
   return { integration, response: null };
 }
+
+export async function loadReportPeriodForViewer(
+  viewer: NonNullable<Awaited<ReturnType<typeof getAuthSession>>>,
+  reportPeriodId: string,
+) {
+  const store = await getStore();
+  const reportPeriod = await store.getReportPeriod(reportPeriodId);
+  if (!reportPeriod) {
+    return {
+      reportPeriod: null,
+      response: NextResponse.json({ error: "Report period not found." }, { status: 404 }),
+    };
+  }
+  const client = await store.getClient(reportPeriod.clientId);
+  if (!client) {
+    return {
+      reportPeriod: null,
+      response: NextResponse.json({ error: "Client not found." }, { status: 404 }),
+    };
+  }
+  if (!canManageClientRecord(viewer, client)) {
+    return { reportPeriod: null, response: forbiddenResponse() };
+  }
+  return { reportPeriod, client, response: null };
+}
+
+export async function loadContextEntryForViewer(
+  viewer: NonNullable<Awaited<ReturnType<typeof getAuthSession>>>,
+  contextEntryId: string,
+) {
+  const store = await getStore();
+  const contextEntry = await store.getContextEntry(contextEntryId);
+  if (!contextEntry) {
+    return {
+      contextEntry: null,
+      response: NextResponse.json({ error: "Context entry not found." }, { status: 404 }),
+    };
+  }
+  const client = await store.getClient(contextEntry.clientId);
+  if (!client) {
+    return {
+      contextEntry: null,
+      response: NextResponse.json({ error: "Client not found." }, { status: 404 }),
+    };
+  }
+  if (!canManageClientRecord(viewer, client)) {
+    return { contextEntry: null, response: forbiddenResponse() };
+  }
+  return { contextEntry, client, response: null };
+}
