@@ -13,8 +13,9 @@ import {
 } from "@/lib/google-auth";
 import { createSessionFromGoogleLogin } from "@/lib/auth-access";
 
-function renderCallbackPage(payload: Record<string, unknown>) {
+function renderCallbackPage(payload: Record<string, unknown>, returnUrl: string) {
   const serialized = JSON.stringify(payload).replaceAll("<", "\\u003c");
+  const safeReturnUrl = JSON.stringify(returnUrl).replaceAll("<", "\\u003c");
   return `
     <!doctype html>
     <html>
@@ -35,10 +36,13 @@ function renderCallbackPage(payload: Record<string, unknown>) {
         </main>
         <script>
           const payload = ${serialized};
+          const returnUrl = ${safeReturnUrl};
           if (window.opener) {
             window.opener.postMessage({ type: "audit-platform:oauth-complete", payload }, window.location.origin);
+            window.setTimeout(() => window.close(), 500);
+          } else {
+            window.setTimeout(() => window.location.replace(returnUrl), 800);
           }
-          window.setTimeout(() => window.close(), 500);
         </script>
       </body>
     </html>
@@ -47,6 +51,7 @@ function renderCallbackPage(payload: Record<string, unknown>) {
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
+  const returnUrl = new URL("/", request.url).toString();
 
   try {
     const state = await readGoogleOAuthState(url);
@@ -71,7 +76,7 @@ export async function GET(request: Request) {
     }
 
     const result = await finishGoogleOAuth(url);
-    return new Response(renderCallbackPage({ ok: true, ...result }), {
+    return new Response(renderCallbackPage({ ok: true, ...result }, returnUrl), {
       status: 200,
       headers: {
         "content-type": "text/html; charset=utf-8",
@@ -98,7 +103,7 @@ export async function GET(request: Request) {
       renderCallbackPage({
         ok: false,
         error: error instanceof Error ? error.message : "OAuth callback failed.",
-      }),
+      }, returnUrl),
       {
         status: 400,
         headers: {

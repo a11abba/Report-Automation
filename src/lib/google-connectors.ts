@@ -432,10 +432,33 @@ function classifyGoogleAdsHealthError(error: unknown): ConnectorHealthCheckResul
       };
     }
     if (error.status === 403) {
+      const message = error.message.trim();
+      const normalized = message.toLowerCase();
+      if (
+        normalized.includes("google ads api has not been used in project") ||
+        normalized.includes("googleads.googleapis.com") ||
+        normalized.includes("it is disabled")
+      ) {
+        return {
+          ok: false,
+          code: "api_disabled",
+          message:
+            "Google Ads API is disabled for this Google Cloud project. Enable googleads.googleapis.com, wait a few minutes, and try again.",
+        };
+      }
+      if (normalized.includes("developer token")) {
+        return {
+          ok: false,
+          code: "developer_token_invalid",
+          message: message || "The configured Google Ads developer token was rejected.",
+        };
+      }
       return {
         ok: false,
         code: "permission_denied",
-        message: "The connected Google account does not have access to the selected Google Ads customer.",
+        message:
+          message ||
+          "The connected Google account does not have access to the selected Google Ads customer.",
       };
     }
     if (error.status === 400) {

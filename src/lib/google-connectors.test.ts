@@ -223,6 +223,53 @@ describe("google ads connector", () => {
     expect(validation.mode).toBe("api");
   });
 
+  it("reports when the Google Ads API is disabled in the Google Cloud project", async () => {
+    process.env.GOOGLE_CLIENT_ID = "client-id";
+    process.env.GOOGLE_CLIENT_SECRET = "client-secret";
+    process.env.GOOGLE_OAUTH_REDIRECT_URI =
+      "http://localhost:3000/api/integrations/google/oauth/callback";
+    process.env.GOOGLE_ADS_DEVELOPER_TOKEN = "developer-token";
+
+    const connector = getConnector("google_ads");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 403,
+            message:
+              "Google Ads API has not been used in project 881040242091 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/googleads.googleapis.com/overview?project=881040242091 then retry.",
+            status: "PERMISSION_DENIED",
+          },
+        }),
+        { status: 403, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const result = await connector.healthCheck(
+      integration({
+        platformKey: "google_ads",
+        platformType: "paid_media",
+        displayName: "Google Ads",
+        credentials: {
+          accessToken: "access-token",
+          refreshToken: "refresh-token",
+        },
+        settings: {
+          googleAdsCustomerId: "123-456-7890",
+          googleAdsLoginCustomerId: "999-888-7777",
+        },
+      }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      ok: false,
+      code: "api_disabled",
+      message:
+        "Google Ads API is disabled for this Google Cloud project. Enable googleads.googleapis.com, wait a few minutes, and try again.",
+    });
+  });
+
   it("maps live Google Ads API data into the paid media snapshot", async () => {
     process.env.GOOGLE_CLIENT_ID = "client-id";
     process.env.GOOGLE_CLIENT_SECRET = "client-secret";

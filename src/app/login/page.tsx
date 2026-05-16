@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getAuthSession } from "@/lib/auth-session-server";
 import { getOperatorAccessSetupSummary } from "@/lib/operator-access";
@@ -7,6 +8,7 @@ interface LoginPageProps {
   searchParams: Promise<{
     error?: string;
     lang?: string;
+    next?: string;
   }>;
 }
 
@@ -60,12 +62,34 @@ const copy = {
 } as const;
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
+  const params = await searchParams;
+  const requestHeaders = await headers();
+  const requestHost =
+    requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
+  if (
+    requestHost?.startsWith("127.0.0.1") ||
+    requestHost?.startsWith("[::1]") ||
+    requestHost?.startsWith("::1")
+  ) {
+    const requestPort = requestHost.includes(":")
+      ? requestHost.slice(requestHost.lastIndexOf(":") + 1)
+      : "";
+    const canonicalUrl = new URL(
+      `${requestHeaders.get("x-forwarded-proto") ?? "http"}://localhost${
+        requestPort ? `:${requestPort}` : ""
+      }/login`,
+    );
+    if (params.error) canonicalUrl.searchParams.set("error", params.error);
+    if (params.lang) canonicalUrl.searchParams.set("lang", params.lang);
+    if (params.next) canonicalUrl.searchParams.set("next", params.next);
+    redirect(canonicalUrl.toString());
+  }
+
   const session = await getAuthSession();
   if (session) {
     redirect("/");
   }
 
-  const params = await searchParams;
   const locale = resolveLocale(params.lang);
   const content = copy[locale];
   const alternateLocale = locale === "en" ? "pt" : "en";
@@ -79,7 +103,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     !operatorAccess.configured ? content.allowlistSetup : null,
   ].filter(Boolean);
   const buttonClassName = googleConfigured
-    ? "border-[color:var(--ink)] bg-[color:var(--ink)] text-[color:var(--paper)] hover:translate-y-[-1px] hover:shadow-[0_18px_34px_rgba(20,33,61,0.18)]"
+    ? "cursor-pointer border-[color:var(--ink)] bg-[color:var(--ink)] text-[color:var(--paper)] hover:translate-y-[-1px] hover:shadow-[0_18px_34px_rgba(20,33,61,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--gold)] focus-visible:ring-offset-2 focus-visible:ring-offset-white"
     : "cursor-not-allowed border-[color:var(--line)] bg-[#e6dfd3] text-[color:rgba(20,33,61,0.72)] shadow-none";
   const buttonAccentClassName = googleConfigured
     ? "text-[color:var(--gold)]"
@@ -87,6 +111,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const buttonSubcopyClassName = googleConfigured
     ? "text-[color:var(--mist)]"
     : "text-[color:var(--muted)]";
+  const googleLoginHref = `/api/auth/google/start?lang=${locale}`;
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-6xl items-center px-4 py-10 sm:px-6 lg:px-8">
@@ -162,12 +187,33 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             </div>
           ) : null}
 
-          <form action="/api/auth/google/start" method="get" className="mt-8">
-            <input type="hidden" name="lang" value={locale} />
+          {googleConfigured ? (
+            <a
+              href={googleLoginHref}
+              className={`mt-8 flex w-full items-center justify-between rounded-[1.75rem] border px-5 py-5 text-left transition ${buttonClassName}`}
+            >
+              <span>
+                <span
+                  className={`block text-xs uppercase tracking-[0.32em] ${buttonAccentClassName}`}
+                >
+                  Google
+                </span>
+                <span className="mt-3 block text-xl font-semibold tracking-[-0.03em]">
+                  {content.ctaTop}
+                </span>
+                <span className={`mt-1 block text-sm ${buttonSubcopyClassName}`}>
+                  {content.ctaBottom}
+                </span>
+              </span>
+              <span className={`text-2xl ${buttonSubcopyClassName}`} aria-hidden="true">
+                →
+              </span>
+            </a>
+          ) : (
             <button
-              type="submit"
-              disabled={!googleConfigured}
-              className={`flex w-full items-center justify-between rounded-[1.75rem] border px-5 py-5 text-left transition ${buttonClassName}`}
+              type="button"
+              disabled
+              className={`mt-8 flex w-full items-center justify-between rounded-[1.75rem] border px-5 py-5 text-left transition ${buttonClassName}`}
             >
               <span>
                 <span
@@ -186,7 +232,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
                 →
               </span>
             </button>
-          </form>
+          )}
         </article>
       </section>
     </main>

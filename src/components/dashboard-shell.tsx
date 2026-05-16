@@ -2,10 +2,12 @@
 
 import {
   useEffect,
+  useRef,
   useState,
   useTransition,
   type InputHTMLAttributes,
   type ReactNode,
+  type SelectHTMLAttributes,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
@@ -132,6 +134,290 @@ interface DashboardData {
   recentAudits: AuditRecord[];
 }
 
+type DashboardClient = DashboardData["clients"][number];
+type DashboardIntegration = DashboardClient["integrations"][number];
+
+interface ResourceOption {
+  value: string;
+  label: string;
+}
+
+interface AutoConfigurationPlan {
+  attemptKey: string;
+  patch: Record<string, unknown>;
+  successMessage: string;
+}
+
+const ignoredMatchTokens = new Set([
+  "com",
+  "net",
+  "org",
+  "www",
+  "http",
+  "https",
+  "google",
+  "account",
+  "property",
+  "profile",
+  "business",
+  "analytics",
+  "ads",
+  "meta",
+  "merchant",
+]);
+
+function getHostname(url: string | null | undefined) {
+  if (!url) return null;
+
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMatchText(value: string | null | undefined) {
+  return (value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function tokenizeMatchText(value: string | null | undefined) {
+  return normalizeMatchText(value)
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !ignoredMatchTokens.has(token));
+}
+
+function getClientMatchTokens(client: DashboardClient) {
+  const tokens = new Set<string>();
+  const hostname = getHostname(client.primaryDomain);
+
+  for (const token of tokenizeMatchText(client.name)) {
+    tokens.add(token);
+  }
+  for (const token of tokenizeMatchText(client.industry)) {
+    tokens.add(token);
+  }
+  if (hostname) {
+    for (const token of tokenizeMatchText(hostname)) {
+      tokens.add(token);
+    }
+  }
+
+  return [...tokens];
+}
+
+function getSummarySearchText(summary: IntegrationPropertySummary) {
+  return normalizeMatchText(
+    [
+      summary.displayName,
+      summary.parentAccountName,
+      summary.propertyId,
+      summary.resourceName,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+}
+
+function scoreSummaryForClient(
+  client: DashboardClient,
+  summary: IntegrationPropertySummary,
+) {
+  const haystack = getSummarySearchText(summary);
+  const hostname = getHostname(client.primaryDomain);
+  let score = 0;
+
+  if (hostname) {
+    if (haystack.includes(hostname)) {
+      score += 12;
+    }
+    for (const token of tokenizeMatchText(hostname)) {
+      if (haystack.includes(token)) {
+        score += token.length >= 6 ? 4 : 3;
+      }
+    }
+  }
+
+  for (const token of getClientMatchTokens(client)) {
+    if (haystack.includes(token)) {
+      score += token.length >= 6 ? 3 : 2;
+    }
+  }
+
+  return score;
+}
+
+function pickRecommendedSummary(
+  client: DashboardClient,
+  summaries: IntegrationPropertySummary[] | undefined,
+) {
+  if (!summaries?.length) return null;
+  if (summaries.length === 1) return summaries[0];
+
+  const ranked = summaries
+    .map((summary) => ({
+      summary,
+      score: scoreSummaryForClient(client, summary),
+    }))
+    .sort((left, right) => right.score - left.score);
+
+  const [best, second] = ranked;
+  if (!best || best.score <= 0) return null;
+  if (second && best.score - second.score < 2) return null;
+  return best.summary;
+}
+
+function getSummaryOptionLabel(summary: IntegrationPropertySummary) {
+  const context = summary.parentAccountName?.trim();
+  if (!context || context === summary.displayName) {
+    return summary.displayName;
+  }
+  return `${summary.displayName} · ${context}`;
+}
+
+function toResourceOptions(summaries: IntegrationPropertySummary[] | undefined): ResourceOption[] {
+  return (summaries ?? []).map((summary) => ({
+    value: summary.propertyId,
+    label: getSummaryOptionLabel(summary),
+  }));
+}
+
+function resolveSuggestedValue(
+  client: DashboardClient,
+  currentValue: string | null | undefined,
+  summaries: IntegrationPropertySummary[] | undefined,
+) {
+  if (currentValue) return currentValue;
+  return pickRecommendedSummary(client, summaries)?.propertyId ?? "";
+}
+
+function getAutoConfigurationPlan(
+  client: DashboardClient,
+  integration: DashboardIntegration,
+): AutoConfigurationPlan | null {
+  if (!integration.connectionDetails.authenticated) {
+    return null;
+  }
+
+  if (
+    integration.platformKey === "google_search_console" &&
+    !integration.settings.propertyId
+  ) {
+    const recommended = pickRecommendedSummary(
+      client,
+      integration.metadata?.propertySummaries,
+    );
+    if (!recommended) return null;
+    return {
+      attemptKey: `${integration.id}:propertyId:${recommended.propertyId}`,
+      patch: {
+        propertyId: recommended.propertyId,
+        demoMode: false,
+      },
+      successMessage: `Search Console property auto-selected for ${client.name}.`,
+    };
+  }
+
+  if (
+    integration.platformKey === "google_business_profile" &&
+    !integration.settings.businessAccountId
+  ) {
+    const recommended = pickRecommendedSummary(
+      client,
+      integration.metadata?.accountSummaries,
+    );
+    if (!recommended) return null;
+    return {
+      attemptKey: `${integration.id}:businessAccountId:${recommended.propertyId}`,
+      patch: {
+        businessAccountId: recommended.propertyId,
+        demoMode: false,
+      },
+      successMessage: `Business Profile account auto-selected for ${client.name}.`,
+    };
+  }
+
+  if (
+    integration.platformKey === "google_business_profile" &&
+    integration.settings.businessAccountId &&
+    !integration.settings.businessProfileId &&
+    integration.metadata?.locationSummaries?.length === 1
+  ) {
+    const [location] = integration.metadata.locationSummaries;
+    if (!location) return null;
+    return {
+      attemptKey: `${integration.id}:businessProfileId:${location.propertyId}`,
+      patch: {
+        businessProfileId: location.propertyId,
+        demoMode: false,
+      },
+      successMessage: `Business Profile location auto-selected for ${client.name}.`,
+    };
+  }
+
+  if (
+    integration.platformKey === "google_analytics" &&
+    !integration.settings.ga4PropertyId
+  ) {
+    const recommended = pickRecommendedSummary(
+      client,
+      integration.metadata?.propertySummaries,
+    );
+    if (!recommended) return null;
+    return {
+      attemptKey: `${integration.id}:ga4PropertyId:${recommended.propertyId}`,
+      patch: {
+        ga4PropertyId: recommended.propertyId,
+        demoMode: false,
+      },
+      successMessage: `GA4 property auto-selected for ${client.name}.`,
+    };
+  }
+
+  if (
+    integration.platformKey === "google_ads" &&
+    !integration.settings.googleAdsCustomerId
+  ) {
+    const recommended = pickRecommendedSummary(
+      client,
+      integration.metadata?.propertySummaries,
+    );
+    if (!recommended) return null;
+    return {
+      attemptKey: `${integration.id}:googleAdsCustomerId:${recommended.propertyId}`,
+      patch: {
+        googleAdsCustomerId: recommended.propertyId,
+        demoMode: false,
+      },
+      successMessage: `Google Ads customer auto-selected for ${client.name}.`,
+    };
+  }
+
+  if (
+    integration.platformKey === "meta_ads" &&
+    !integration.settings.adAccountId
+  ) {
+    const recommended = pickRecommendedSummary(
+      client,
+      integration.metadata?.propertySummaries,
+    );
+    if (!recommended) return null;
+    return {
+      attemptKey: `${integration.id}:adAccountId:${recommended.propertyId}`,
+      patch: {
+        adAccountId: recommended.propertyId,
+        demoMode: false,
+      },
+      successMessage: `Meta ad account auto-selected for ${client.name}.`,
+    };
+  }
+
+  return null;
+}
+
 export function DashboardShell({
   initialData,
   viewer,
@@ -144,6 +430,7 @@ export function DashboardShell({
   const [message, setMessage] = useState<string | null>(null);
   const [deleteIntentClientId, setDeleteIntentClientId] = useState<string | null>(null);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState("");
+  const attemptedAutoConfigurations = useRef(new Set<string>());
   const { data } = useQuery({
     queryKey: ["dashboard"],
     queryFn: () => getJson<DashboardData>("/api/dashboard"),
@@ -182,6 +469,40 @@ export function DashboardShell({
     return () => window.removeEventListener("message", handleMessage);
   }, [queryClient]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const autoConfigureIntegration = async () => {
+      for (const client of data.clients) {
+        for (const integration of client.integrations) {
+          const plan = getAutoConfigurationPlan(client, integration);
+          if (!plan) continue;
+          if (attemptedAutoConfigurations.current.has(plan.attemptKey)) continue;
+
+          attemptedAutoConfigurations.current.add(plan.attemptKey);
+
+          try {
+            await patchJson(`/api/clients/${client.id}/integrations/${integration.id}`, plan.patch);
+            if (cancelled) return;
+            setMessage(plan.successMessage);
+            await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+          } catch (error) {
+            if (cancelled) return;
+            setMessage(error instanceof Error ? error.message : "Automatic configuration failed.");
+          }
+
+          return;
+        }
+      }
+    };
+
+    void autoConfigureIntegration();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data.clients, queryClient]);
+
   const launchGoogleOAuth = (clientId: string, platformKey: string) => {
     runTask(async () => {
       const payload = await postJson<{ authUrl?: string }>(
@@ -198,9 +519,10 @@ export function DashboardShell({
         }
 
         const opened = window.open(payload.authUrl, "_blank", "width=920,height=780");
-        if (!opened) {
-          throw new Error("The OAuth window was blocked. Please allow popups and try again.");
+        if (opened) {
+          return;
         }
+        window.location.assign(payload.authUrl);
         return;
       }
       throw new Error("OAuth URL was not returned.");
@@ -223,9 +545,10 @@ export function DashboardShell({
         }
 
         const opened = window.open(payload.authUrl, "_blank", "width=920,height=780");
-        if (!opened) {
-          throw new Error("The OAuth window was blocked. Please allow popups and try again.");
+        if (opened) {
+          return;
         }
+        window.location.assign(payload.authUrl);
         return;
       }
       throw new Error("OAuth URL was not returned.");
@@ -1114,11 +1437,63 @@ export function DashboardShell({
                       {client.integrations.length === 0 ? (
                         <EmptyPill text="No integrations yet" />
                       ) : (
-                        client.integrations.map((integration) => (
-                          <article
-                            key={integration.id}
-                            className="rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4"
-                          >
+                        client.integrations.map((integration) => {
+                          const propertyOptions = toResourceOptions(
+                            integration.metadata?.propertySummaries,
+                          );
+                          const accountOptions = toResourceOptions(
+                            integration.metadata?.accountSummaries,
+                          );
+                          const locationOptions = toResourceOptions(
+                            integration.metadata?.locationSummaries,
+                          );
+                          const recommendedProperty = pickRecommendedSummary(
+                            client,
+                            integration.metadata?.propertySummaries,
+                          );
+                          const recommendedAccount = pickRecommendedSummary(
+                            client,
+                            integration.metadata?.accountSummaries,
+                          );
+                          const searchConsoleValue = resolveSuggestedValue(
+                            client,
+                            integration.settings.propertyId ?? null,
+                            integration.metadata?.propertySummaries,
+                          );
+                          const ga4Value = resolveSuggestedValue(
+                            client,
+                            integration.settings.ga4PropertyId ?? null,
+                            integration.metadata?.propertySummaries,
+                          );
+                          const googleAdsValue = resolveSuggestedValue(
+                            client,
+                            integration.settings.googleAdsCustomerId ?? null,
+                            integration.metadata?.propertySummaries,
+                          );
+                          const metaAdsValue = resolveSuggestedValue(
+                            client,
+                            integration.settings.adAccountId ?? null,
+                            integration.metadata?.propertySummaries,
+                          );
+                          const businessAccountValue = resolveSuggestedValue(
+                            client,
+                            integration.settings.businessAccountId ?? null,
+                            integration.metadata?.accountSummaries,
+                          );
+                          const showRecommendedPropertyHint =
+                            !integration.connectionDetails.resourceSelected &&
+                            Boolean(recommendedProperty) &&
+                            (integration.metadata?.propertySummaries?.length ?? 0) > 1;
+                          const showRecommendedAccountHint =
+                            !integration.settings.businessAccountId &&
+                            Boolean(recommendedAccount) &&
+                            (integration.metadata?.accountSummaries?.length ?? 0) > 1;
+
+                          return (
+                            <article
+                              key={integration.id}
+                              className="rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4"
+                            >
                             <div className="flex flex-wrap items-start justify-between gap-3">
                               <div>
                                 <p className="font-medium text-white">
@@ -1137,6 +1512,47 @@ export function DashboardShell({
                             <p className="mt-3 text-sm leading-6 text-slate-400">
                               {integration.validationMessage}
                             </p>
+
+                            {(integration.platformKey === "google_search_console" ||
+                              integration.platformKey === "google_business_profile" ||
+                              integration.platformKey === "google_analytics" ||
+                              integration.platformKey === "google_ads") &&
+                            !integration.connectionDetails.authenticated ? (
+                              <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-300/10 px-4 py-3 text-sm leading-6 text-amber-100">
+                                <p>
+                                  OAuth is not connected yet. Saving IDs below does not register the
+                                  Google account by itself.
+                                </p>
+                                <div className="mt-3">
+                                  <button
+                                    className="rounded-full border border-amber-300/30 bg-amber-200/10 px-4 py-2 text-xs uppercase tracking-[0.2em] text-amber-50"
+                                    onClick={() => {
+                                      if (integration.platformKey === "google_search_console") {
+                                        launchGoogleOAuth(client.id, "google_search_console");
+                                        return;
+                                      }
+                                      if (integration.platformKey === "google_business_profile") {
+                                        launchGoogleOAuth(client.id, "google_business_profile");
+                                        return;
+                                      }
+                                      if (integration.platformKey === "google_analytics") {
+                                        launchGoogleOAuth(client.id, "google_analytics");
+                                        return;
+                                      }
+                                      launchGoogleOAuth(client.id, "google_ads");
+                                    }}
+                                  >
+                                    {integration.platformKey === "google_analytics"
+                                      ? "Connect GA4 first"
+                                      : integration.platformKey === "google_ads"
+                                        ? "Connect Google Ads first"
+                                        : integration.platformKey === "google_business_profile"
+                                          ? "Connect Business Profile first"
+                                          : "Connect Search Console first"}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
 
                             <div className="mt-3 flex flex-wrap gap-2">
                               <StatusChip
@@ -1162,350 +1578,805 @@ export function DashboardShell({
                             </div>
 
                             {integration.platformKey === "google_search_console" ? (
-                              <form
-                                className="mt-4 grid gap-4"
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  const formData = new FormData(event.currentTarget);
-                                  const propertyId = String(formData.get("propertyId") ?? "").trim();
-                                  runTask(
-                                    () =>
-                                      patchJson(
-                                        `/api/clients/${client.id}/integrations/${integration.id}`,
-                                        {
-                                          propertyId: propertyId || null,
-                                          demoMode: false,
-                                        },
-                                      ),
-                                    `Search Console property updated for ${client.name}.`,
-                                  );
-                                }}
-                              >
-                                <FieldWithHelp
-                                  label="Property"
-                                  helpTitle="Which Search Console property goes here?"
-                                  helpBody={
-                                    <>
-                                      <p>
-                                        Paste the exact Search Console property, such as <code>sc-domain:example.com</code> or <code>https://example.com/</code>.
-                                      </p>
-                                      <p>
-                                        If accessible properties were discovered, you can pick one from the browser suggestion list on this field.
-                                      </p>
-                                    </>
-                                  }
-                                >
-                                  <Input
-                                    name="propertyId"
-                                    list={`search-console-properties-${integration.id}`}
-                                    placeholder="sc-domain:example.com or https://example.com/"
-                                    defaultValue={integration.settings.propertyId ?? ""}
-                                  />
-                                </FieldWithHelp>
-                                <button
-                                  type="submit"
-                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
-                                >
-                                  Save Search Console property
-                                </button>
-                                <datalist id={`search-console-properties-${integration.id}`}>
-                                  {integration.metadata?.propertySummaries?.map((summary) => (
-                                    <option key={summary.resourceName} value={summary.propertyId}>
-                                      {summary.displayName}
-                                    </option>
-                                  ))}
-                                </datalist>
-                              </form>
+                              <div className="mt-4 grid gap-4">
+                                {propertyOptions.length > 0 ? (
+                                  <>
+                                    <div className="grid gap-2">
+                                      <ResourceSelectField
+                                        label="Property"
+                                        helpTitle="Which Search Console property should we use?"
+                                        helpBody={
+                                          <>
+                                            <p>
+                                              Pick the Search Console property that matches this
+                                              client. The system will save it immediately.
+                                            </p>
+                                            <p>
+                                              When the domain match is clear, the dashboard now
+                                              preselects it for you.
+                                            </p>
+                                          </>
+                                        }
+                                        value={searchConsoleValue}
+                                        placeholder="Select an accessible Search Console property"
+                                        options={propertyOptions}
+                                        onChange={(value) =>
+                                          runTask(
+                                            () =>
+                                              patchJson(
+                                                `/api/clients/${client.id}/integrations/${integration.id}`,
+                                                {
+                                                  propertyId: value || null,
+                                                  demoMode: false,
+                                                },
+                                              ),
+                                            `Search Console property updated for ${client.name}.`,
+                                          )
+                                        }
+                                      />
+                                      {showRecommendedPropertyHint && recommendedProperty ? (
+                                        <p className="text-xs text-slate-500">
+                                          Recommended: {getSummaryOptionLabel(recommendedProperty)}
+                                        </p>
+                                      ) : null}
+                                    </div>
+
+                                    <details className="rounded-[1rem] border border-white/10 bg-[#111925] p-4">
+                                      <summary className="cursor-pointer text-sm font-medium text-slate-200">
+                                        Open manual property entry
+                                      </summary>
+                                      <form
+                                        className="mt-4 grid gap-4"
+                                        onSubmit={(event) => {
+                                          event.preventDefault();
+                                          const formData = new FormData(event.currentTarget);
+                                          const propertyId = String(formData.get("propertyId") ?? "").trim();
+                                          runTask(
+                                            () =>
+                                              patchJson(
+                                                `/api/clients/${client.id}/integrations/${integration.id}`,
+                                                {
+                                                  propertyId: propertyId || null,
+                                                  demoMode: false,
+                                                },
+                                              ),
+                                            `Search Console property updated for ${client.name}.`,
+                                          );
+                                        }}
+                                      >
+                                        <Input
+                                          name="propertyId"
+                                          placeholder="sc-domain:example.com or https://example.com/"
+                                          defaultValue={integration.settings.propertyId ?? ""}
+                                        />
+                                        <button
+                                          type="submit"
+                                          className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                        >
+                                          Save manual property
+                                        </button>
+                                      </form>
+                                    </details>
+                                  </>
+                                ) : (
+                                  <form
+                                    className="grid gap-4"
+                                    onSubmit={(event) => {
+                                      event.preventDefault();
+                                      const formData = new FormData(event.currentTarget);
+                                      const propertyId = String(formData.get("propertyId") ?? "").trim();
+                                      runTask(
+                                        () =>
+                                          patchJson(
+                                            `/api/clients/${client.id}/integrations/${integration.id}`,
+                                            {
+                                              propertyId: propertyId || null,
+                                              demoMode: false,
+                                            },
+                                          ),
+                                        `Search Console property updated for ${client.name}.`,
+                                      );
+                                    }}
+                                  >
+                                    <FieldWithHelp
+                                      label="Property"
+                                      helpTitle="Which Search Console property goes here?"
+                                      helpBody={
+                                        <>
+                                          <p>
+                                            Paste the exact Search Console property, such as <code>sc-domain:example.com</code> or <code>https://example.com/</code>.
+                                          </p>
+                                          <p>
+                                            This manual field stays available as a fallback when the accessible property list has not loaded yet.
+                                          </p>
+                                        </>
+                                      }
+                                    >
+                                      <Input
+                                        name="propertyId"
+                                        placeholder="sc-domain:example.com or https://example.com/"
+                                        defaultValue={integration.settings.propertyId ?? ""}
+                                      />
+                                    </FieldWithHelp>
+                                    <button
+                                      type="submit"
+                                      className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                    >
+                                      Save Search Console property
+                                    </button>
+                                  </form>
+                                )}
+                              </div>
                             ) : null}
 
                             {integration.platformKey === "google_business_profile" ? (
-                              <form
-                                className="mt-4 grid gap-4"
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  const formData = new FormData(event.currentTarget);
-                                  const businessAccountId = String(
-                                    formData.get("businessAccountId") ?? "",
-                                  ).trim();
-                                  const businessProfileId = String(
-                                    formData.get("businessProfileId") ?? "",
-                                  ).trim();
-                                  runTask(
-                                    () =>
-                                      patchJson(
-                                        `/api/clients/${client.id}/integrations/${integration.id}`,
-                                        {
-                                          businessAccountId: businessAccountId || null,
-                                          businessProfileId: businessProfileId || null,
-                                          demoMode: false,
-                                        },
-                                      ),
-                                    `Business Profile IDs updated for ${client.name}.`,
-                                  );
-                                }}
-                              >
+                              <div className="mt-4 grid gap-4">
                                 <div className="grid gap-3 lg:grid-cols-2">
-                                  <FieldWithHelp
-                                    label="Business account ID"
-                                    helpTitle="Which Business Profile account ID goes here?"
-                                    helpBody={
-                                      <>
-                                        <p>
-                                          Use the account resource, such as <code>accounts/123456789</code>.
+                                  {accountOptions.length > 0 ? (
+                                    <div className="grid gap-2">
+                                      <ResourceSelectField
+                                        label="Business account"
+                                        helpTitle="Which Business Profile account should we use?"
+                                        helpBody={
+                                          <>
+                                            <p>
+                                              Pick the accessible account that matches this client.
+                                              The dashboard saves it immediately.
+                                            </p>
+                                            <p>
+                                              If only one account is available, it is auto-selected
+                                              for you.
+                                            </p>
+                                          </>
+                                        }
+                                        value={businessAccountValue}
+                                        placeholder="Select an accessible Business Profile account"
+                                        options={accountOptions}
+                                        onChange={(value) =>
+                                          runTask(
+                                            () =>
+                                              patchJson(
+                                                `/api/clients/${client.id}/integrations/${integration.id}`,
+                                                {
+                                                  businessAccountId: value || null,
+                                                  businessProfileId: null,
+                                                  demoMode: false,
+                                                },
+                                              ),
+                                            `Business Profile account updated for ${client.name}.`,
+                                          )
+                                        }
+                                      />
+                                      {showRecommendedAccountHint && recommendedAccount ? (
+                                        <p className="text-xs text-slate-500">
+                                          Recommended: {getSummaryOptionLabel(recommendedAccount)}
                                         </p>
-                                        <p>
-                                          If the integration already discovered accessible accounts, you can pick one from the browser suggestion list on this field.
-                                        </p>
-                                      </>
-                                    }
-                                  >
-                                    <Input
-                                      name="businessAccountId"
-                                      list={`business-profile-accounts-${integration.id}`}
-                                      placeholder="accounts/123456789"
-                                      defaultValue={integration.settings.businessAccountId ?? ""}
+                                      ) : null}
+                                    </div>
+                                  ) : (
+                                    <FieldWithHelp
+                                      label="Business account ID"
+                                      helpTitle="Which Business Profile account ID goes here?"
+                                      helpBody={
+                                        <>
+                                          <p>
+                                            Use the account resource, such as <code>accounts/123456789</code>.
+                                          </p>
+                                          <p>
+                                            This manual field stays available when the account list
+                                            cannot be discovered yet.
+                                          </p>
+                                        </>
+                                      }
+                                    >
+                                      <Input
+                                        name="businessAccountId"
+                                        form={`business-profile-manual-${integration.id}`}
+                                        placeholder="accounts/123456789"
+                                        defaultValue={integration.settings.businessAccountId ?? ""}
+                                      />
+                                    </FieldWithHelp>
+                                  )}
+
+                                  {locationOptions.length > 0 ? (
+                                    <ResourceSelectField
+                                      label="Primary location"
+                                      helpTitle="When should I choose a location?"
+                                      helpBody={
+                                        <>
+                                          <p>
+                                            Leave the selection on <strong>All accessible locations</strong> to aggregate the entire account.
+                                          </p>
+                                          <p>
+                                            Choose a specific unit only when this client report
+                                            should focus on one location.
+                                          </p>
+                                        </>
+                                      }
+                                      value={integration.settings.businessProfileId ?? ""}
+                                      placeholder="All accessible locations"
+                                      options={locationOptions}
+                                      onChange={(value) =>
+                                        runTask(
+                                          () =>
+                                            patchJson(
+                                              `/api/clients/${client.id}/integrations/${integration.id}`,
+                                              {
+                                                businessProfileId: value || null,
+                                                demoMode: false,
+                                              },
+                                            ),
+                                          `Business Profile location updated for ${client.name}.`,
+                                        )
+                                      }
                                     />
-                                  </FieldWithHelp>
-                                  <FieldWithHelp
-                                    label="Primary location ID"
-                                    helpTitle="When should I fill the location ID?"
-                                    helpBody={
-                                      <>
-                                        <p>
-                                          Leave this blank to aggregate all accessible locations under the account.
-                                        </p>
-                                        <p>
-                                          Fill it with a specific resource like <code>locations/987654321</code> when the report should focus on one unit only.
-                                        </p>
-                                      </>
-                                    }
-                                  >
-                                    <Input
-                                      name="businessProfileId"
-                                      list={`business-profile-locations-${integration.id}`}
-                                      placeholder="locations/987654321 (optional)"
-                                      defaultValue={integration.settings.businessProfileId ?? ""}
-                                    />
-                                  </FieldWithHelp>
+                                  ) : accountOptions.length > 0 ||
+                                    Boolean(integration.settings.businessAccountId) ? (
+                                    <div className="rounded-[1rem] border border-white/10 bg-[#111925] p-4 text-sm leading-6 text-slate-400">
+                                      <p className="font-medium text-slate-200">Primary location</p>
+                                      <p className="mt-2">
+                                        All accessible locations stay included by default. Once this
+                                        account finishes loading locations, you can optionally narrow
+                                        the report to a single unit.
+                                      </p>
+                                    </div>
+                                  ) : (
+                                    <FieldWithHelp
+                                      label="Primary location ID"
+                                      helpTitle="When should I fill the location ID?"
+                                      helpBody={
+                                        <>
+                                          <p>
+                                            Leave this blank to aggregate all accessible locations under the account.
+                                          </p>
+                                          <p>
+                                            Fill it with a specific resource like <code>locations/987654321</code> when the report should focus on one unit only.
+                                          </p>
+                                        </>
+                                      }
+                                    >
+                                      <Input
+                                        name="businessProfileId"
+                                        form={`business-profile-manual-${integration.id}`}
+                                        placeholder="locations/987654321 (optional)"
+                                        defaultValue={integration.settings.businessProfileId ?? ""}
+                                      />
+                                    </FieldWithHelp>
+                                  )}
                                 </div>
-                                <button
-                                  type="submit"
-                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+
+                                <form
+                                  id={`business-profile-manual-${integration.id}`}
+                                  className={clsx(
+                                    "grid gap-4",
+                                    accountOptions.length > 0 || locationOptions.length > 0
+                                      ? "hidden"
+                                      : "",
+                                  )}
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    const formData = new FormData(event.currentTarget);
+                                    const businessAccountId = String(
+                                      formData.get("businessAccountId") ?? "",
+                                    ).trim();
+                                    const businessProfileId = String(
+                                      formData.get("businessProfileId") ?? "",
+                                    ).trim();
+                                    runTask(
+                                      () =>
+                                        patchJson(
+                                          `/api/clients/${client.id}/integrations/${integration.id}`,
+                                          {
+                                            businessAccountId: businessAccountId || null,
+                                            businessProfileId: businessProfileId || null,
+                                            demoMode: false,
+                                          },
+                                        ),
+                                      `Business Profile IDs updated for ${client.name}.`,
+                                    );
+                                  }}
                                 >
-                                  Save Business Profile IDs
-                                </button>
-                                <datalist id={`business-profile-accounts-${integration.id}`}>
-                                  {integration.metadata?.accountSummaries?.map((summary) => (
-                                    <option key={summary.resourceName} value={summary.propertyId}>
-                                      {summary.displayName}
-                                    </option>
-                                  ))}
-                                </datalist>
-                                <datalist id={`business-profile-locations-${integration.id}`}>
-                                  {integration.metadata?.locationSummaries?.map((summary) => (
-                                    <option key={summary.resourceName} value={summary.propertyId}>
-                                      {summary.displayName}
-                                    </option>
-                                  ))}
-                                </datalist>
-                              </form>
+                                  <button
+                                    type="submit"
+                                    className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                  >
+                                    Save Business Profile IDs
+                                  </button>
+                                </form>
+
+                                {accountOptions.length > 0 || locationOptions.length > 0 ? (
+                                  <details className="rounded-[1rem] border border-white/10 bg-[#111925] p-4">
+                                    <summary className="cursor-pointer text-sm font-medium text-slate-200">
+                                      Open manual fallback fields
+                                    </summary>
+                                    <form
+                                      className="mt-4 grid gap-4"
+                                      onSubmit={(event) => {
+                                        event.preventDefault();
+                                        const formData = new FormData(event.currentTarget);
+                                        const businessAccountId = String(
+                                          formData.get("businessAccountId") ?? "",
+                                        ).trim();
+                                        const businessProfileId = String(
+                                          formData.get("businessProfileId") ?? "",
+                                        ).trim();
+                                        runTask(
+                                          () =>
+                                            patchJson(
+                                              `/api/clients/${client.id}/integrations/${integration.id}`,
+                                              {
+                                                businessAccountId: businessAccountId || null,
+                                                businessProfileId: businessProfileId || null,
+                                                demoMode: false,
+                                              },
+                                            ),
+                                          `Business Profile IDs updated for ${client.name}.`,
+                                        );
+                                      }}
+                                    >
+                                      <div className="grid gap-3 lg:grid-cols-2">
+                                        <Input
+                                          name="businessAccountId"
+                                          placeholder="accounts/123456789"
+                                          defaultValue={integration.settings.businessAccountId ?? ""}
+                                        />
+                                        <Input
+                                          name="businessProfileId"
+                                          placeholder="locations/987654321 (optional)"
+                                          defaultValue={integration.settings.businessProfileId ?? ""}
+                                        />
+                                      </div>
+                                      <button
+                                        type="submit"
+                                        className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                      >
+                                        Save manual IDs
+                                      </button>
+                                    </form>
+                                  </details>
+                                ) : null}
+                              </div>
                             ) : null}
 
                             {integration.platformKey === "google_analytics" ? (
-                              <form
-                                className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]"
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  const formData = new FormData(event.currentTarget);
-                                  const ga4PropertyId = String(formData.get("ga4PropertyId") ?? "").trim();
-                                  runTask(
-                                    () =>
-                                      patchJson(
-                                        `/api/clients/${client.id}/integrations/${integration.id}`,
-                                        {
-                                          ga4PropertyId: ga4PropertyId || null,
-                                          demoMode: false,
-                                        },
-                                      ),
-                                    `GA4 property updated for ${client.name}.`,
-                                  );
-                                }}
-                              >
-                                <Input
-                                  name="ga4PropertyId"
-                                  placeholder="GA4 property ID (123456789 or properties/123456789)"
-                                  defaultValue={integration.settings.ga4PropertyId ?? ""}
-                                />
-                                <button
-                                  type="submit"
-                                  className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
-                                >
-                                  Save GA4 property
-                                </button>
-                              </form>
+                              <div className="mt-4 grid gap-4">
+                                {propertyOptions.length > 0 ? (
+                                  <>
+                                    <div className="grid gap-2">
+                                      <ResourceSelectField
+                                        label="GA4 property"
+                                        helpTitle="Which GA4 property should we use?"
+                                        helpBody={
+                                          <>
+                                            <p>
+                                              Choose the GA4 property that matches this client. The
+                                              dashboard saves the selection immediately.
+                                            </p>
+                                            <p>
+                                              We now recommend or auto-select the best match whenever
+                                              the property list is clear enough.
+                                            </p>
+                                          </>
+                                        }
+                                        value={ga4Value}
+                                        placeholder="Select an accessible GA4 property"
+                                        options={propertyOptions}
+                                        onChange={(value) =>
+                                          runTask(
+                                            () =>
+                                              patchJson(
+                                                `/api/clients/${client.id}/integrations/${integration.id}`,
+                                                {
+                                                  ga4PropertyId: value || null,
+                                                  demoMode: false,
+                                                },
+                                              ),
+                                            `GA4 property updated for ${client.name}.`,
+                                          )
+                                        }
+                                      />
+                                      {showRecommendedPropertyHint && recommendedProperty ? (
+                                        <p className="text-xs text-slate-500">
+                                          Recommended: {getSummaryOptionLabel(recommendedProperty)}
+                                        </p>
+                                      ) : null}
+                                    </div>
+
+                                    <details className="rounded-[1rem] border border-white/10 bg-[#111925] p-4">
+                                      <summary className="cursor-pointer text-sm font-medium text-slate-200">
+                                        Open manual property entry
+                                      </summary>
+                                      <form
+                                        className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]"
+                                        onSubmit={(event) => {
+                                          event.preventDefault();
+                                          const formData = new FormData(event.currentTarget);
+                                          const ga4PropertyId = String(formData.get("ga4PropertyId") ?? "").trim();
+                                          runTask(
+                                            () =>
+                                              patchJson(
+                                                `/api/clients/${client.id}/integrations/${integration.id}`,
+                                                {
+                                                  ga4PropertyId: ga4PropertyId || null,
+                                                  demoMode: false,
+                                                },
+                                              ),
+                                            `GA4 property updated for ${client.name}.`,
+                                          );
+                                        }}
+                                      >
+                                        <Input
+                                          name="ga4PropertyId"
+                                          placeholder="GA4 property ID (123456789 or properties/123456789)"
+                                          defaultValue={integration.settings.ga4PropertyId ?? ""}
+                                        />
+                                        <button
+                                          type="submit"
+                                          className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
+                                        >
+                                          Save manual property
+                                        </button>
+                                      </form>
+                                    </details>
+                                  </>
+                                ) : (
+                                  <form
+                                    className="grid gap-3 lg:grid-cols-[1fr_auto]"
+                                    onSubmit={(event) => {
+                                      event.preventDefault();
+                                      const formData = new FormData(event.currentTarget);
+                                      const ga4PropertyId = String(formData.get("ga4PropertyId") ?? "").trim();
+                                      runTask(
+                                        () =>
+                                          patchJson(
+                                            `/api/clients/${client.id}/integrations/${integration.id}`,
+                                            {
+                                              ga4PropertyId: ga4PropertyId || null,
+                                              demoMode: false,
+                                            },
+                                          ),
+                                        `GA4 property updated for ${client.name}.`,
+                                      );
+                                    }}
+                                  >
+                                    <Input
+                                      name="ga4PropertyId"
+                                      placeholder="GA4 property ID (123456789 or properties/123456789)"
+                                      defaultValue={integration.settings.ga4PropertyId ?? ""}
+                                    />
+                                    <button
+                                      type="submit"
+                                      className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
+                                    >
+                                      Save GA4 property
+                                    </button>
+                                  </form>
+                                )}
+                              </div>
                             ) : null}
 
                             {integration.platformKey === "google_ads" ? (
-                              <form
-                                className="mt-4 grid gap-4"
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  const formData = new FormData(event.currentTarget);
-                                  const googleAdsCustomerId = String(
-                                    formData.get("googleAdsCustomerId") ?? "",
-                                  ).trim();
-                                  const googleAdsLoginCustomerId = String(
-                                    formData.get("googleAdsLoginCustomerId") ?? "",
-                                  ).trim();
-                                  runTask(
-                                    () =>
-                                      patchJson(
-                                        `/api/clients/${client.id}/integrations/${integration.id}`,
-                                        {
-                                          googleAdsCustomerId: googleAdsCustomerId || null,
-                                          googleAdsLoginCustomerId: googleAdsLoginCustomerId || null,
-                                          demoMode: false,
-                                        },
-                                      ),
-                                    `Google Ads account updated for ${client.name}.`,
-                                  );
-                                }}
-                              >
-                                <div className="grid gap-3 lg:grid-cols-2">
-                                  <FieldWithHelp
-                                    label="Customer ID"
-                                    helpTitle="Which Google Ads ID goes here?"
-                                    helpBody={
-                                      <>
-                                        <p>
-                                          Use the advertiser <strong>Customer ID</strong> you want
-                                          to report on.
+                              <div className="mt-4 grid gap-4">
+                                {propertyOptions.length > 0 ? (
+                                  <>
+                                    <div className="grid gap-2">
+                                      <ResourceSelectField
+                                        label="Customer"
+                                        helpTitle="Which Google Ads customer should we use?"
+                                        helpBody={
+                                          <>
+                                            <p>
+                                              Choose the advertiser account you want to report on. The
+                                              selection is saved immediately.
+                                            </p>
+                                            <p>
+                                              The manager account ID is now treated as an advanced
+                                              option instead of the main setup step.
+                                            </p>
+                                          </>
+                                        }
+                                        value={googleAdsValue}
+                                        placeholder="Select an accessible Google Ads customer"
+                                        options={propertyOptions}
+                                        onChange={(value) =>
+                                          runTask(
+                                            () =>
+                                              patchJson(
+                                                `/api/clients/${client.id}/integrations/${integration.id}`,
+                                                {
+                                                  googleAdsCustomerId: value || null,
+                                                  demoMode: false,
+                                                },
+                                              ),
+                                            `Google Ads account updated for ${client.name}.`,
+                                          )
+                                        }
+                                      />
+                                      {showRecommendedPropertyHint && recommendedProperty ? (
+                                        <p className="text-xs text-slate-500">
+                                          Recommended: {getSummaryOptionLabel(recommendedProperty)}
                                         </p>
-                                        <p>
-                                          Google Ads usually shows it as <code>123-456-7890</code>.
-                                          You can paste it with or without hyphens.
-                                        </p>
-                                      </>
-                                    }
+                                      ) : null}
+                                    </div>
+
+                                    <details className="rounded-[1rem] border border-white/10 bg-[#111925] p-4">
+                                      <summary className="cursor-pointer text-sm font-medium text-slate-200">
+                                        Open advanced Google Ads IDs
+                                      </summary>
+                                      <form
+                                        className="mt-4 grid gap-4"
+                                        onSubmit={(event) => {
+                                          event.preventDefault();
+                                          const formData = new FormData(event.currentTarget);
+                                          const googleAdsCustomerId = String(
+                                            formData.get("googleAdsCustomerId") ?? "",
+                                          ).trim();
+                                          const googleAdsLoginCustomerId = String(
+                                            formData.get("googleAdsLoginCustomerId") ?? "",
+                                          ).trim();
+                                          runTask(
+                                            () =>
+                                              patchJson(
+                                                `/api/clients/${client.id}/integrations/${integration.id}`,
+                                                {
+                                                  googleAdsCustomerId: googleAdsCustomerId || null,
+                                                  googleAdsLoginCustomerId: googleAdsLoginCustomerId || null,
+                                                  demoMode: false,
+                                                },
+                                              ),
+                                            `Google Ads account updated for ${client.name}.`,
+                                          );
+                                        }}
+                                      >
+                                        <Input
+                                          name="googleAdsCustomerId"
+                                          placeholder="Google Ads customer ID"
+                                          defaultValue={integration.settings.googleAdsCustomerId ?? ""}
+                                        />
+                                        <FieldWithHelp
+                                          label="Login Customer ID"
+                                          helpTitle="When is login customer ID needed?"
+                                          helpBody={
+                                            <>
+                                              <p>
+                                                Fill this only when the connected Google user accesses the
+                                                advertiser through a <strong>manager account (MCC)</strong>.
+                                              </p>
+                                              <p>
+                                                Use the manager account customer ID, also with or without
+                                                hyphens.
+                                              </p>
+                                            </>
+                                          }
+                                        >
+                                          <Input
+                                            name="googleAdsLoginCustomerId"
+                                            placeholder="Manager account ID (optional)"
+                                            defaultValue={integration.settings.googleAdsLoginCustomerId ?? ""}
+                                          />
+                                        </FieldWithHelp>
+                                        <button
+                                          type="submit"
+                                          className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                        >
+                                          Save advanced IDs
+                                        </button>
+                                      </form>
+                                    </details>
+                                  </>
+                                ) : (
+                                  <form
+                                    className="grid gap-4"
+                                    onSubmit={(event) => {
+                                      event.preventDefault();
+                                      const formData = new FormData(event.currentTarget);
+                                      const googleAdsCustomerId = String(
+                                        formData.get("googleAdsCustomerId") ?? "",
+                                      ).trim();
+                                      const googleAdsLoginCustomerId = String(
+                                        formData.get("googleAdsLoginCustomerId") ?? "",
+                                      ).trim();
+                                      runTask(
+                                        () =>
+                                          patchJson(
+                                            `/api/clients/${client.id}/integrations/${integration.id}`,
+                                            {
+                                              googleAdsCustomerId: googleAdsCustomerId || null,
+                                              googleAdsLoginCustomerId: googleAdsLoginCustomerId || null,
+                                              demoMode: false,
+                                            },
+                                          ),
+                                          `Google Ads account updated for ${client.name}.`,
+                                        );
+                                    }}
                                   >
-                                    <Input
-                                      name="googleAdsCustomerId"
-                                      placeholder="Google Ads customer ID"
-                                      defaultValue={integration.settings.googleAdsCustomerId ?? ""}
-                                    />
-                                  </FieldWithHelp>
-                                  <FieldWithHelp
-                                    label="Login Customer ID"
-                                    helpTitle="When is login customer ID needed?"
-                                    helpBody={
-                                      <>
-                                        <p>
-                                          Fill this only when the connected Google user accesses the
-                                          advertiser through a <strong>manager account (MCC)</strong>.
-                                        </p>
-                                        <p>
-                                          Use the manager account customer ID, also with or without
-                                          hyphens.
-                                        </p>
-                                      </>
-                                    }
-                                  >
-                                    <Input
-                                      name="googleAdsLoginCustomerId"
-                                      placeholder="Manager account ID (optional)"
-                                      defaultValue={integration.settings.googleAdsLoginCustomerId ?? ""}
-                                    />
-                                  </FieldWithHelp>
-                                </div>
-                                <button
-                                  type="submit"
-                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
-                                >
-                                  Save Google Ads IDs
-                                </button>
-                              </form>
+                                    <div className="grid gap-3 lg:grid-cols-2">
+                                      <FieldWithHelp
+                                        label="Customer ID"
+                                        helpTitle="Which Google Ads ID goes here?"
+                                        helpBody={
+                                          <>
+                                            <p>
+                                              Use the advertiser <strong>Customer ID</strong> you want
+                                              to report on.
+                                            </p>
+                                            <p>
+                                              Google Ads usually shows it as <code>123-456-7890</code>.
+                                              You can paste it with or without hyphens.
+                                            </p>
+                                          </>
+                                        }
+                                      >
+                                        <Input
+                                          name="googleAdsCustomerId"
+                                          placeholder="Google Ads customer ID"
+                                          defaultValue={integration.settings.googleAdsCustomerId ?? ""}
+                                        />
+                                      </FieldWithHelp>
+                                      <FieldWithHelp
+                                        label="Login Customer ID"
+                                        helpTitle="When is login customer ID needed?"
+                                        helpBody={
+                                          <>
+                                            <p>
+                                              Fill this only when the connected Google user accesses the
+                                              advertiser through a <strong>manager account (MCC)</strong>.
+                                            </p>
+                                            <p>
+                                              Use the manager account customer ID, also with or without
+                                              hyphens.
+                                            </p>
+                                          </>
+                                        }
+                                      >
+                                        <Input
+                                          name="googleAdsLoginCustomerId"
+                                          placeholder="Manager account ID (optional)"
+                                          defaultValue={integration.settings.googleAdsLoginCustomerId ?? ""}
+                                        />
+                                      </FieldWithHelp>
+                                    </div>
+                                    <button
+                                      type="submit"
+                                      className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                    >
+                                      Save Google Ads IDs
+                                    </button>
+                                  </form>
+                                )}
+                              </div>
                             ) : null}
 
                             {integration.platformKey === "meta_ads" ? (
-                              <form
-                                className="mt-4 grid gap-4"
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  const formData = new FormData(event.currentTarget);
-                                  const apiKey = String(formData.get("apiKey") ?? "").trim();
-                                  const adAccountId = String(formData.get("adAccountId") ?? "").trim();
-                                  runTask(
-                                    () =>
-                                      patchJson(
-                                        `/api/clients/${client.id}/integrations/${integration.id}`,
-                                        {
-                                          ...(apiKey
-                                            ? {
-                                                apiKey,
-                                                authOrigin: "api_key",
-                                              }
-                                            : {}),
-                                          adAccountId: adAccountId || null,
-                                          demoMode: false,
-                                        },
-                                      ),
-                                    `Meta ad account updated for ${client.name}.`,
-                                  );
-                                }}
-                              >
-                                <div className="grid gap-3 lg:grid-cols-2">
-                                  <FieldWithHelp
-                                    label="Access token"
-                                    helpTitle="Which Meta credential goes here?"
-                                    helpBody={
-                                      <>
-                                        <p>
-                                          Paste the <strong>Meta Ads access token</strong> used by
-                                          your reporting connection.
-                                        </p>
-                                        <p>
-                                          Leave this field blank when you only want to keep the
-                                          current token and update the account ID.
-                                        </p>
-                                      </>
-                                    }
-                                  >
-                                    <Input
-                                      name="apiKey"
-                                      type="password"
-                                      placeholder="Meta access token"
+                              <div className="mt-4 grid gap-4">
+                                {propertyOptions.length > 0 ? (
+                                  <div className="grid gap-2">
+                                    <ResourceSelectField
+                                      label="Ad account"
+                                      helpTitle="Which Meta ad account should we use?"
+                                      helpBody={
+                                        <>
+                                          <p>
+                                            Choose the discovered Meta ad account that belongs to this client.
+                                          </p>
+                                          <p>
+                                            The dashboard saves it immediately and keeps the token
+                                            entry as an advanced step only.
+                                          </p>
+                                        </>
+                                      }
+                                      value={metaAdsValue}
+                                      placeholder="Select an accessible Meta ad account"
+                                      options={propertyOptions}
+                                      onChange={(value) =>
+                                        runTask(
+                                          () =>
+                                            patchJson(
+                                              `/api/clients/${client.id}/integrations/${integration.id}`,
+                                              {
+                                                adAccountId: value || null,
+                                                demoMode: false,
+                                              },
+                                            ),
+                                          `Meta ad account updated for ${client.name}.`,
+                                        )
+                                      }
                                     />
-                                  </FieldWithHelp>
-                                  <FieldWithHelp
-                                    label="Ad account ID"
-                                    helpTitle="Which Meta ID should I paste?"
-                                    helpBody={
-                                      <>
-                                        <p>
-                                          Use the numeric <strong>Ad Account ID</strong> shown in
-                                          Meta, such as <code>61589750244560</code>.
-                                        </p>
-                                        <p>
-                                          You can also paste it as <code>act_61589750244560</code>.
-                                          The connector accepts both formats.
-                                        </p>
-                                      </>
-                                    }
+                                    {showRecommendedPropertyHint && recommendedProperty ? (
+                                      <p className="text-xs text-slate-500">
+                                        Recommended: {getSummaryOptionLabel(recommendedProperty)}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+
+                                <details className="rounded-[1rem] border border-white/10 bg-[#111925] p-4">
+                                  <summary className="cursor-pointer text-sm font-medium text-slate-200">
+                                    {propertyOptions.length > 0
+                                      ? "Open manual Meta token and ID fields"
+                                      : "Configure Meta token and account"}
+                                  </summary>
+                                  <form
+                                    className="mt-4 grid gap-4"
+                                    onSubmit={(event) => {
+                                      event.preventDefault();
+                                      const formData = new FormData(event.currentTarget);
+                                      const apiKey = String(formData.get("apiKey") ?? "").trim();
+                                      const adAccountId = String(formData.get("adAccountId") ?? "").trim();
+                                      runTask(
+                                        () =>
+                                          patchJson(
+                                            `/api/clients/${client.id}/integrations/${integration.id}`,
+                                            {
+                                              ...(apiKey
+                                                ? {
+                                                    apiKey,
+                                                    authOrigin: "api_key",
+                                                  }
+                                                : {}),
+                                              adAccountId: adAccountId || null,
+                                              demoMode: false,
+                                            },
+                                          ),
+                                        `Meta ad account updated for ${client.name}.`,
+                                      );
+                                    }}
                                   >
-                                    <Input
-                                      name="adAccountId"
-                                      placeholder="Meta ad account ID"
-                                      defaultValue={integration.settings.adAccountId ?? ""}
-                                    />
-                                  </FieldWithHelp>
-                                </div>
-                                <button
-                                  type="submit"
-                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
-                                >
-                                  Save Meta connection
-                                </button>
-                              </form>
+                                    <div className="grid gap-3 lg:grid-cols-2">
+                                      <FieldWithHelp
+                                        label="Access token"
+                                        helpTitle="Which Meta credential goes here?"
+                                        helpBody={
+                                          <>
+                                            <p>
+                                              Paste the <strong>Meta Ads access token</strong> used by
+                                              your reporting connection.
+                                            </p>
+                                            <p>
+                                              Leave this field blank when you only want to keep the
+                                              current token and update the account ID.
+                                            </p>
+                                          </>
+                                        }
+                                      >
+                                        <Input
+                                          name="apiKey"
+                                          type="password"
+                                          placeholder="Meta access token"
+                                        />
+                                      </FieldWithHelp>
+                                      <FieldWithHelp
+                                        label="Ad account ID"
+                                        helpTitle="Which Meta ID should I paste?"
+                                        helpBody={
+                                          <>
+                                            <p>
+                                              Use the numeric <strong>Ad Account ID</strong> shown in
+                                              Meta, such as <code>61589750244560</code>.
+                                            </p>
+                                            <p>
+                                              You can also paste it as <code>act_61589750244560</code>.
+                                              The connector accepts both formats.
+                                            </p>
+                                          </>
+                                        }
+                                      >
+                                        <Input
+                                          name="adAccountId"
+                                          placeholder="Meta ad account ID"
+                                          defaultValue={integration.settings.adAccountId ?? ""}
+                                        />
+                                      </FieldWithHelp>
+                                    </div>
+                                    <button
+                                      type="submit"
+                                      className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                    >
+                                      Save Meta connection
+                                    </button>
+                                  </form>
+                                </details>
+                              </div>
                             ) : null}
 
                             {integration.platformKey === "microsoft_ads" ? (
@@ -1768,9 +2639,9 @@ export function DashboardShell({
                                   summaries={integration.metadata.propertySummaries}
                                 />
                               </>
-                            ) : null}
+                          ) : null}
                           </article>
-                        ))
+                        )})
                       )}
                     </div>
 
@@ -2035,6 +2906,44 @@ function FieldWithHelp({
   );
 }
 
+function ResourceSelectField({
+  label,
+  helpTitle,
+  helpBody,
+  value,
+  placeholder,
+  options,
+  onChange,
+}: {
+  label: string;
+  helpTitle: string;
+  helpBody: ReactNode;
+  value: string;
+  placeholder: string;
+  options: ResourceOption[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <FieldWithHelp
+      label={label}
+      helpTitle={helpTitle}
+      helpBody={helpBody}
+    >
+      <SelectInput
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">{placeholder}</option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </SelectInput>
+    </FieldWithHelp>
+  );
+}
+
 function MetadataSummaryPreview({
   label,
   summaries,
@@ -2084,6 +2993,15 @@ function Input(props: InputHTMLAttributes<HTMLInputElement>) {
     <input
       {...props}
       className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+    />
+  );
+}
+
+function SelectInput(props: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      {...props}
+      className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
     />
   );
 }

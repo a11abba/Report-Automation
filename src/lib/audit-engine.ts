@@ -1080,12 +1080,20 @@ export async function listLocationsForClient(clientId: string) {
   return store.listLocationsByClient(clientId);
 }
 
-export async function beginGoogleOAuth(clientId: string, platformKey: PlatformKey) {
-  return buildGoogleOAuthUrl(clientId, platformKey);
+export async function beginGoogleOAuth(
+  clientId: string,
+  platformKey: PlatformKey,
+  requestOrigin?: string,
+) {
+  return buildGoogleOAuthUrl(clientId, platformKey, requestOrigin);
 }
 
-export async function beginMicrosoftOAuth(clientId: string, platformKey: PlatformKey) {
-  return buildMicrosoftOAuthUrl(clientId, platformKey);
+export async function beginMicrosoftOAuth(
+  clientId: string,
+  platformKey: PlatformKey,
+  requestOrigin?: string,
+) {
+  return buildMicrosoftOAuthUrl(clientId, platformKey, requestOrigin);
 }
 
 async function upsertOAuthIntegration(

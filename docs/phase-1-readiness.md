@@ -57,6 +57,7 @@ Required:
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_OAUTH_REDIRECT_URI`
+- `GOOGLE_ADS_DEVELOPER_TOKEN` for Google Ads
 
 Business Profile also requires:
 
@@ -152,6 +153,7 @@ Exit condition:
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_OAUTH_REDIRECT_URI`
+- `GOOGLE_ADS_DEVELOPER_TOKEN` for Google Ads
 
 Optional:
 

@@ -4,6 +4,7 @@ import type {
   OAuthSessionRecord,
   PlatformKey,
 } from "@/lib/audit/types";
+import { resolveOAuthRedirectUri } from "@/lib/oauth-redirect";
 import { getStore } from "@/lib/storage";
 import { createHmac } from "@/services/app-secret";
 
@@ -58,11 +59,12 @@ async function decodeOAuthState(state: string) {
   return JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf-8")) as MicrosoftOAuthStatePayload;
 }
 
-function getRedirectUri() {
-  return (
-    process.env.MICROSOFT_OAUTH_REDIRECT_URI ??
-    "http://localhost:3000/api/integrations/microsoft/oauth/callback"
-  );
+function getRedirectUri(requestOrigin?: string | null) {
+  return resolveOAuthRedirectUri({
+    configuredRedirectUri: process.env.MICROSOFT_OAUTH_REDIRECT_URI,
+    requestOrigin,
+    fallbackPath: "/api/integrations/microsoft/oauth/callback",
+  });
 }
 
 export function getMicrosoftScopes(platformKey: PlatformKey): string[] {
@@ -79,7 +81,11 @@ export async function readMicrosoftOAuthState(url: URL) {
   return decodeOAuthState(state);
 }
 
-export async function buildMicrosoftOAuthUrl(clientId: string, platformKey: PlatformKey) {
+export async function buildMicrosoftOAuthUrl(
+  clientId: string,
+  platformKey: PlatformKey,
+  requestOrigin?: string,
+) {
   assertMicrosoftPlatform(platformKey);
   const microsoftClientId = process.env.MICROSOFT_CLIENT_ID;
   if (!microsoftClientId) {
@@ -87,7 +93,7 @@ export async function buildMicrosoftOAuthUrl(clientId: string, platformKey: Plat
   }
 
   const scopes = getMicrosoftScopes(platformKey);
-  const redirectUri = getRedirectUri();
+  const redirectUri = getRedirectUri(requestOrigin);
   const codeVerifier = createCodeVerifier();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
   const store = await getStore();

@@ -10,6 +10,7 @@ import {
   readGoogleLoginCookieValue,
   type AppLocale,
 } from "@/lib/auth-session";
+import { resolveOAuthRedirectUri } from "@/lib/oauth-redirect";
 import { getStore } from "@/lib/storage";
 import { createHmac } from "@/services/app-secret";
 
@@ -93,11 +94,12 @@ export async function readGoogleOAuthState(url: URL) {
   return decodeOAuthState(state);
 }
 
-function getRedirectUri() {
-  return (
-    process.env.GOOGLE_OAUTH_REDIRECT_URI ??
-    "http://localhost:3000/api/integrations/google/oauth/callback"
-  );
+function getRedirectUri(requestOrigin?: string | null) {
+  return resolveOAuthRedirectUri({
+    configuredRedirectUri: process.env.GOOGLE_OAUTH_REDIRECT_URI,
+    requestOrigin,
+    fallbackPath: "/api/integrations/google/oauth/callback",
+  });
 }
 
 export function getGoogleScopes(platformKey: PlatformKey): string[] {
@@ -127,6 +129,7 @@ export function getGoogleScopes(platformKey: PlatformKey): string[] {
 export async function buildGoogleOAuthUrl(
   clientId: string,
   platformKey: PlatformKey,
+  requestOrigin?: string,
 ): Promise<GoogleOAuthStartResult> {
   assertGooglePlatform(platformKey);
   const googleClientId = process.env.GOOGLE_CLIENT_ID;
@@ -136,7 +139,7 @@ export async function buildGoogleOAuthUrl(
   }
 
   const scopes = getGoogleScopes(platformKey);
-  const redirectUri = getRedirectUri();
+  const redirectUri = getRedirectUri(requestOrigin);
   const codeVerifier = createCodeVerifier();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
   const store = await getStore();
@@ -181,14 +184,14 @@ export async function buildGoogleOAuthUrl(
   };
 }
 
-export async function buildGoogleLoginUrl(locale: AppLocale) {
+export async function buildGoogleLoginUrl(locale: AppLocale, requestOrigin?: string) {
   const googleClientId = process.env.GOOGLE_CLIENT_ID;
 
   if (!googleClientId) {
     throw new Error("GOOGLE_CLIENT_ID is not configured.");
   }
 
-  const redirectUri = getRedirectUri();
+  const redirectUri = getRedirectUri(requestOrigin);
   const codeVerifier = createCodeVerifier();
   const nonce = crypto.randomUUID().replaceAll("-", "");
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();

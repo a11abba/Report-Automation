@@ -5,6 +5,8 @@ import {
   readAuthSessionValue,
 } from "@/lib/auth-session";
 
+const DEV_LOOPBACK_ALIASES = new Set(["127.0.0.1", "::1", "[::1]"]);
+
 function isPublicPath(pathname: string) {
   return (
     pathname === "/login" ||
@@ -16,6 +18,15 @@ function isPublicPath(pathname: string) {
 }
 
 export async function proxy(request: NextRequest) {
+  if (
+    process.env.NODE_ENV === "development" &&
+    DEV_LOOPBACK_ALIASES.has(request.nextUrl.hostname)
+  ) {
+    const canonicalUrl = request.nextUrl.clone();
+    canonicalUrl.hostname = "localhost";
+    return NextResponse.redirect(canonicalUrl);
+  }
+
   const { pathname, search } = request.nextUrl;
   const rawSession = await readAuthSessionValue(
     request.cookies.get(AUTH_SESSION_COOKIE)?.value,

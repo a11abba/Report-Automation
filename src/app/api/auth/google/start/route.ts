@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { buildGoogleLoginUrl } from "@/lib/google-auth";
 import { GOOGLE_LOGIN_COOKIE, getLoginCookieOptions } from "@/lib/auth-session";
+import { resolveRequestOrigin } from "@/lib/oauth-redirect";
 
 function resolveLocale(value: string | null) {
   return value === "pt" ? "pt" : "en";
@@ -11,7 +12,7 @@ export async function GET(request: Request) {
   const locale = resolveLocale(url.searchParams.get("lang"));
 
   try {
-    const result = await buildGoogleLoginUrl(locale);
+    const result = await buildGoogleLoginUrl(locale, resolveRequestOrigin(request));
     const response = NextResponse.redirect(result.authUrl, 303);
     response.cookies.set(
       GOOGLE_LOGIN_COOKIE,
