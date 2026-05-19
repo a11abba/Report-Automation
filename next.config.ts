@@ -19,6 +19,20 @@ const cspHeader = [
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
+  outputFileTracingExcludes: {
+    "/*": [
+      "./.codex-*",
+      "./apps/**/*",
+      "./data/**/*",
+      "./database/**/*",
+      "./desktop/**/*",
+      "./docs/**/*",
+      "./node_modules/electron/**/*",
+      "./*.log",
+      "./*.png",
+      "./*.pdf",
+    ],
+  },
   turbopack: {
     root: rootDir,
   },
