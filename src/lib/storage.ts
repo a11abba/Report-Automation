@@ -6,6 +6,7 @@ import {
   type AuditEventRecord,
   type AuditRecord,
   type AuditReportPayload,
+  type ClientReportMemoryLinkRecord,
   type ClientRecord,
   type ContextEntryRecord,
   type IntegrationRecord,
@@ -14,6 +15,8 @@ import {
   type JobStatus,
   type LocationRecord,
   type OAuthSessionRecord,
+  type ReportFeedbackRecord,
+  type ReportMemoryRecord,
   type ReportPeriodRecord,
   type UserRecord,
 } from "@/lib/audit/types";
@@ -51,6 +54,13 @@ function hydrateReport(report: AuditReportPayload): AuditReportPayload {
     hypotheses: report.hypotheses ?? [],
     recommendations: report.recommendations ?? [],
     confidenceNotes: report.confidenceNotes ?? [],
+    framework: report.framework ?? {
+      executiveSummary: "",
+      whatHappened: report.dataFacts ?? [],
+      whyItHappened: report.hypotheses ?? [],
+      whatWeAreDoing: report.recommendations ?? [],
+      ccipaPillars: [],
+    },
     findings: (report.findings ?? []).map((finding) => ({
       ...finding,
       severityLabel: finding.severityLabel ?? String(finding.severity ?? ""),
@@ -107,15 +117,53 @@ export interface AppStore {
     accountId: string,
     input: Pick<
       ClientRecord,
-      "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus"
+      | "name"
+      | "industry"
+      | "industryLabelPt"
+      | "operatingModel"
+      | "primaryDomain"
+      | "reportLanguage"
+      | "reportFocus"
+      | "reportIntro"
+      | "reportBenchmarks"
+      | "referenceReportNotes"
     >,
   ): Promise<ClientRecord>;
+  listReportMemories(accountId?: string): Promise<ReportMemoryRecord[]>;
+  getReportMemory(id: string): Promise<ReportMemoryRecord | null>;
+  createReportMemory(
+    accountId: string,
+    input: Pick<ReportMemoryRecord, "title" | "sourceClientName" | "periodLabel" | "notes" | "content">,
+  ): Promise<ReportMemoryRecord>;
+  deleteReportMemory(id: string): Promise<ReportMemoryRecord | null>;
+  listClientReportMemoryLinks(clientId: string): Promise<ClientReportMemoryLinkRecord[]>;
+  listReportMemoriesByClient(clientId: string): Promise<ReportMemoryRecord[]>;
+  attachReportMemoryToClient(clientId: string, reportMemoryId: string): Promise<ClientReportMemoryLinkRecord>;
+  detachReportMemoryFromClient(clientId: string, reportMemoryId: string): Promise<void>;
+  listReportFeedbackByClient(clientId: string): Promise<ReportFeedbackRecord[]>;
+  listReportFeedbackByAudit(auditId: string): Promise<ReportFeedbackRecord[]>;
+  createReportFeedback(
+    auditId: string,
+    input: Pick<ReportFeedbackRecord, "rating" | "notes">,
+  ): Promise<ReportFeedbackRecord>;
   updateClient(
     id: string,
     patch: Partial<
       Pick<
         ClientRecord,
-        "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus" | "monthlyReportEnabled" | "monthlyReportDay" | "monthlyReportAutoGenerate"
+        | "name"
+        | "industry"
+        | "industryLabelPt"
+        | "operatingModel"
+        | "primaryDomain"
+        | "reportLanguage"
+        | "reportFocus"
+        | "reportIntro"
+        | "reportBenchmarks"
+        | "referenceReportNotes"
+        | "monthlyReportEnabled"
+        | "monthlyReportDay"
+        | "monthlyReportAutoGenerate"
       >
     >,
   ): Promise<ClientRecord | null>;
@@ -133,6 +181,7 @@ export interface AppStore {
     id: string,
     patch: Partial<Pick<IntegrationRecord, "displayName" | "credentials" | "settings">>,
   ): Promise<IntegrationRecord | null>;
+  deleteIntegration(id: string): Promise<IntegrationRecord | null>;
   listLocationsByClient(clientId: string): Promise<LocationRecord[]>;
   upsertLocations(
     clientId: string,
@@ -301,6 +350,9 @@ class SQLiteStore implements AppStore {
         primary_domain text,
         report_language text not null,
         report_focus text not null default 'full_funnel',
+        report_intro text,
+        report_benchmarks text,
+        reference_report_notes text,
         monthly_report_enabled integer not null default 0,
         monthly_report_day integer,
         monthly_report_auto_generate integer not null default 1,
@@ -384,6 +436,36 @@ class SQLiteStore implements AppStore {
         audit_id text primary key,
         payload text not null
       );
+      create table if not exists report_memories (
+        id text primary key,
+        account_id text not null,
+        title text not null,
+        source_client_name text,
+        period_label text,
+        notes text,
+        content text not null,
+        created_at text not null,
+        updated_at text not null
+      );
+      create table if not exists client_report_memory_links (
+        id text primary key,
+        account_id text not null,
+        client_id text not null,
+        report_memory_id text not null,
+        created_at text not null
+      );
+      create unique index if not exists client_report_memory_links_unique
+        on client_report_memory_links (client_id, report_memory_id);
+      create table if not exists report_feedback (
+        id text primary key,
+        account_id text not null,
+        client_id text not null,
+        audit_id text not null,
+        rating text not null,
+        notes text not null,
+        created_at text not null,
+        updated_at text not null
+      );
       create table if not exists oauth_sessions (
         id text primary key,
         account_id text not null,
@@ -452,6 +534,15 @@ class SQLiteStore implements AppStore {
     if (!this.hasColumn("clients", "monthly_report_auto_generate")) {
       this.db.exec("alter table clients add column monthly_report_auto_generate integer not null default 1;");
     }
+    if (!this.hasColumn("clients", "report_intro")) {
+      this.db.exec("alter table clients add column report_intro text;");
+    }
+    if (!this.hasColumn("clients", "report_benchmarks")) {
+      this.db.exec("alter table clients add column report_benchmarks text;");
+    }
+    if (!this.hasColumn("clients", "reference_report_notes")) {
+      this.db.exec("alter table clients add column reference_report_notes text;");
+    }
   }
 
   private hasColumn(tableName: string, columnName: string) {
@@ -484,8 +575,8 @@ class SQLiteStore implements AppStore {
     }
 
     const insertClient = this.db.prepare(`
-      insert or ignore into clients (id, account_id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      insert or ignore into clients (id, account_id, name, industry, industry_label_pt, operating_model, primary_domain, report_language, report_focus, report_intro, report_benchmarks, reference_report_notes, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertIntegration = this.db.prepare(`
       insert or ignore into integrations (id, account_id, client_id, platform_key, platform_type, display_name, credentials, settings, created_at, updated_at)
@@ -514,6 +605,9 @@ class SQLiteStore implements AppStore {
         client.primaryDomain,
         client.reportLanguage ?? "pt-BR",
         client.reportFocus ?? "full_funnel",
+        client.reportIntro ?? null,
+        client.reportBenchmarks ?? null,
+        client.referenceReportNotes ?? null,
         client.createdAt,
         client.updatedAt,
       );
@@ -581,6 +675,9 @@ class SQLiteStore implements AppStore {
       primaryDomain: (row.primary_domain as string | null) ?? null,
       reportLanguage: (row.report_language as ClientRecord["reportLanguage"]) ?? "pt-BR",
       reportFocus: (row.report_focus as ClientRecord["reportFocus"]) ?? "full_funnel",
+      reportIntro: (row.report_intro as string | null) ?? null,
+      reportBenchmarks: (row.report_benchmarks as string | null) ?? null,
+      referenceReportNotes: (row.reference_report_notes as string | null) ?? null,
       monthlyReportEnabled: Boolean(row.monthly_report_enabled),
       monthlyReportDay:
         row.monthly_report_day == null ? null : Number(row.monthly_report_day),
@@ -664,6 +761,43 @@ class SQLiteStore implements AppStore {
       effectiveEndDate: (row.effective_end_date as string | null) ?? null,
       authorName: String(row.author_name),
       authorEmail: String(row.author_email),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapReportMemory(row: Record<string, unknown>): ReportMemoryRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      title: String(row.title),
+      sourceClientName: (row.source_client_name as string | null) ?? null,
+      periodLabel: (row.period_label as string | null) ?? null,
+      notes: (row.notes as string | null) ?? null,
+      content: String(row.content),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapClientReportMemoryLink(row: Record<string, unknown>): ClientReportMemoryLinkRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      clientId: String(row.client_id),
+      reportMemoryId: String(row.report_memory_id),
+      createdAt: String(row.created_at),
+    };
+  }
+
+  private mapReportFeedback(row: Record<string, unknown>): ReportFeedbackRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      clientId: String(row.client_id),
+      auditId: String(row.audit_id),
+      rating: row.rating as ReportFeedbackRecord["rating"],
+      notes: String(row.notes),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -1108,7 +1242,19 @@ class SQLiteStore implements AppStore {
 
   async createClient(
     accountId: string,
-    input: Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus">,
+    input: Pick<
+      ClientRecord,
+      | "name"
+      | "industry"
+      | "industryLabelPt"
+      | "operatingModel"
+      | "primaryDomain"
+      | "reportLanguage"
+      | "reportFocus"
+      | "reportIntro"
+      | "reportBenchmarks"
+      | "referenceReportNotes"
+    >,
   ) {
     await this.ensureMigrated();
     const now = new Date().toISOString();
@@ -1133,13 +1279,16 @@ class SQLiteStore implements AppStore {
         primary_domain,
         report_language,
         report_focus,
+        report_intro,
+        report_benchmarks,
+        reference_report_notes,
         monthly_report_enabled,
         monthly_report_day,
         monthly_report_auto_generate,
         created_at,
         updated_at
       )
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       client.id,
       client.accountId,
@@ -1150,6 +1299,9 @@ class SQLiteStore implements AppStore {
       client.primaryDomain,
       client.reportLanguage,
       client.reportFocus,
+      client.reportIntro,
+      client.reportBenchmarks,
+      client.referenceReportNotes,
       client.monthlyReportEnabled ? 1 : 0,
       client.monthlyReportDay,
       client.monthlyReportAutoGenerate ? 1 : 0,
@@ -1161,7 +1313,24 @@ class SQLiteStore implements AppStore {
 
   async updateClient(
     id: string,
-    patch: Partial<Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus" | "monthlyReportEnabled" | "monthlyReportDay" | "monthlyReportAutoGenerate">>,
+    patch: Partial<
+      Pick<
+        ClientRecord,
+        | "name"
+        | "industry"
+        | "industryLabelPt"
+        | "operatingModel"
+        | "primaryDomain"
+        | "reportLanguage"
+        | "reportFocus"
+        | "reportIntro"
+        | "reportBenchmarks"
+        | "referenceReportNotes"
+        | "monthlyReportEnabled"
+        | "monthlyReportDay"
+        | "monthlyReportAutoGenerate"
+      >
+    >,
   ) {
     const current = await this.getClient(id);
     if (!current) return null;
@@ -1172,7 +1341,7 @@ class SQLiteStore implements AppStore {
     };
     this.db.prepare(`
       update clients
-      set name = ?, industry = ?, industry_label_pt = ?, operating_model = ?, primary_domain = ?, report_language = ?, report_focus = ?, monthly_report_enabled = ?, monthly_report_day = ?, monthly_report_auto_generate = ?, updated_at = ?
+      set name = ?, industry = ?, industry_label_pt = ?, operating_model = ?, primary_domain = ?, report_language = ?, report_focus = ?, report_intro = ?, report_benchmarks = ?, reference_report_notes = ?, monthly_report_enabled = ?, monthly_report_day = ?, monthly_report_auto_generate = ?, updated_at = ?
       where id = ?
     `).run(
       next.name,
@@ -1182,6 +1351,9 @@ class SQLiteStore implements AppStore {
       next.primaryDomain,
       next.reportLanguage,
       next.reportFocus,
+      next.reportIntro,
+      next.reportBenchmarks,
+      next.referenceReportNotes,
       next.monthlyReportEnabled ? 1 : 0,
       next.monthlyReportDay,
       next.monthlyReportAutoGenerate ? 1 : 0,
@@ -1189,6 +1361,175 @@ class SQLiteStore implements AppStore {
       id,
     );
     return next;
+  }
+
+  async listReportMemories(accountId?: string) {
+    await this.ensureMigrated();
+    const query = accountId
+      ? "select * from report_memories where account_id = ? order by created_at desc"
+      : "select * from report_memories order by created_at desc";
+    const rows = accountId
+      ? this.db.prepare(query).all<Record<string, unknown>>(accountId)
+      : this.db.prepare(query).all<Record<string, unknown>>();
+    return rows.map((row) => this.mapReportMemory(row));
+  }
+
+  async getReportMemory(id: string) {
+    await this.ensureMigrated();
+    const row = this.db.prepare("select * from report_memories where id = ?").get<Record<string, unknown>>(id);
+    return row ? this.mapReportMemory(row) : null;
+  }
+
+  async createReportMemory(
+    accountId: string,
+    input: Pick<ReportMemoryRecord, "title" | "sourceClientName" | "periodLabel" | "notes" | "content">,
+  ) {
+    await this.ensureMigrated();
+    const now = new Date().toISOString();
+    const memory: ReportMemoryRecord = {
+      id: createId("memory"),
+      accountId,
+      title: input.title,
+      sourceClientName: input.sourceClientName,
+      periodLabel: input.periodLabel,
+      notes: input.notes,
+      content: input.content,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db.prepare(`
+      insert into report_memories (id, account_id, title, source_client_name, period_label, notes, content, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      memory.id,
+      memory.accountId,
+      memory.title,
+      memory.sourceClientName,
+      memory.periodLabel,
+      memory.notes,
+      memory.content,
+      memory.createdAt,
+      memory.updatedAt,
+    );
+    return memory;
+  }
+
+  async deleteReportMemory(id: string) {
+    await this.ensureMigrated();
+    const current = await this.getReportMemory(id);
+    if (!current) return null;
+    this.db.prepare("delete from client_report_memory_links where report_memory_id = ?").run(id);
+    this.db.prepare("delete from report_memories where id = ?").run(id);
+    return current;
+  }
+
+  async listClientReportMemoryLinks(clientId: string) {
+    await this.ensureMigrated();
+    return this.db
+      .prepare("select * from client_report_memory_links where client_id = ? order by created_at desc")
+      .all<Record<string, unknown>>(clientId)
+      .map((row) => this.mapClientReportMemoryLink(row));
+  }
+
+  async listReportMemoriesByClient(clientId: string) {
+    await this.ensureMigrated();
+    const rows = this.db.prepare(`
+      select rm.*
+      from report_memories rm
+      inner join client_report_memory_links links on links.report_memory_id = rm.id
+      where links.client_id = ?
+      order by links.created_at desc
+    `).all<Record<string, unknown>>(clientId);
+    return rows.map((row) => this.mapReportMemory(row));
+  }
+
+  async attachReportMemoryToClient(clientId: string, reportMemoryId: string) {
+    await this.ensureMigrated();
+    const client = await this.getClient(clientId);
+    const memory = await this.getReportMemory(reportMemoryId);
+    if (!client || !memory) {
+      throw new Error("Client or report memory not found.");
+    }
+    if (client.accountId !== memory.accountId) {
+      throw new Error("Report memory and client must belong to the same account.");
+    }
+    const existing = this.db.prepare(
+      "select * from client_report_memory_links where client_id = ? and report_memory_id = ?",
+    ).get<Record<string, unknown>>(clientId, reportMemoryId);
+    if (existing) {
+      return this.mapClientReportMemoryLink(existing);
+    }
+    const link: ClientReportMemoryLinkRecord = {
+      id: createId("memory_link"),
+      accountId: client.accountId,
+      clientId,
+      reportMemoryId,
+      createdAt: new Date().toISOString(),
+    };
+    this.db.prepare(`
+      insert into client_report_memory_links (id, account_id, client_id, report_memory_id, created_at)
+      values (?, ?, ?, ?, ?)
+    `).run(link.id, link.accountId, link.clientId, link.reportMemoryId, link.createdAt);
+    return link;
+  }
+
+  async detachReportMemoryFromClient(clientId: string, reportMemoryId: string) {
+    await this.ensureMigrated();
+    this.db.prepare(
+      "delete from client_report_memory_links where client_id = ? and report_memory_id = ?",
+    ).run(clientId, reportMemoryId);
+  }
+
+  async listReportFeedbackByClient(clientId: string) {
+    await this.ensureMigrated();
+    return this.db
+      .prepare("select * from report_feedback where client_id = ? order by created_at desc")
+      .all<Record<string, unknown>>(clientId)
+      .map((row) => this.mapReportFeedback(row));
+  }
+
+  async listReportFeedbackByAudit(auditId: string) {
+    await this.ensureMigrated();
+    return this.db
+      .prepare("select * from report_feedback where audit_id = ? order by created_at desc")
+      .all<Record<string, unknown>>(auditId)
+      .map((row) => this.mapReportFeedback(row));
+  }
+
+  async createReportFeedback(
+    auditId: string,
+    input: Pick<ReportFeedbackRecord, "rating" | "notes">,
+  ) {
+    await this.ensureMigrated();
+    const audit = await this.getAudit(auditId);
+    if (!audit) {
+      throw new Error("Audit not found.");
+    }
+    const now = new Date().toISOString();
+    const feedback: ReportFeedbackRecord = {
+      id: createId("feedback"),
+      accountId: audit.accountId,
+      clientId: audit.clientId,
+      auditId,
+      rating: input.rating,
+      notes: input.notes,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db.prepare(`
+      insert into report_feedback (id, account_id, client_id, audit_id, rating, notes, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      feedback.id,
+      feedback.accountId,
+      feedback.clientId,
+      feedback.auditId,
+      feedback.rating,
+      feedback.notes,
+      feedback.createdAt,
+      feedback.updatedAt,
+    );
+    return feedback;
   }
 
   async deleteClient(id: string) {
@@ -1203,6 +1544,7 @@ class SQLiteStore implements AppStore {
     for (const auditId of auditIds) {
       this.db.prepare("delete from audit_reports where audit_id = ?").run(auditId);
       this.db.prepare("delete from audit_events where audit_id = ?").run(auditId);
+      this.db.prepare("delete from report_feedback where audit_id = ?").run(auditId);
     }
 
     for (const job of jobs) {
@@ -1217,6 +1559,8 @@ class SQLiteStore implements AppStore {
     }
 
     this.db.prepare("delete from context_entries where client_id = ?").run(id);
+    this.db.prepare("delete from client_report_memory_links where client_id = ?").run(id);
+    this.db.prepare("delete from report_feedback where client_id = ?").run(id);
     this.db.prepare("delete from report_periods where client_id = ?").run(id);
     this.db.prepare("delete from oauth_sessions where client_id = ?").run(id);
     this.db.prepare("delete from locations where client_id = ?").run(id);
@@ -1299,6 +1643,13 @@ class SQLiteStore implements AppStore {
       id,
     );
     return next;
+  }
+
+  async deleteIntegration(id: string) {
+    const current = await this.getIntegration(id);
+    if (!current) return null;
+    this.db.prepare("delete from integrations where id = ?").run(id);
+    return current;
   }
 
   async listLocationsByClient(clientId: string) {

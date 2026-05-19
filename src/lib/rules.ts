@@ -371,6 +371,32 @@ export function evaluateRules(snapshot: NormalizedBusinessSnapshot): AuditFindin
         sourcePlatforms: ["meta_ads"],
       });
     }
+    const weakCampaign = snapshot.paidMedia.topCampaigns.find((campaign) =>
+      snapshot.paidMedia &&
+      snapshot.paidMedia.spend > 0 &&
+      campaign.spend / snapshot.paidMedia.spend >= 0.15 &&
+      (campaign.roas ?? 0) > 0 &&
+      (snapshot.paidMedia.roas ?? 0) > 0 &&
+      (campaign.roas ?? 0) < (snapshot.paidMedia.roas ?? 0) * 0.6,
+    );
+    if (weakCampaign) {
+      pushFinding(findings, {
+        code: "paid.campaign-efficiency",
+        sectionKey: "paid_media",
+        category: "paid_media_performance",
+        section: "",
+        severity: "high",
+        status: "watch",
+        params: {
+          campaign: weakCampaign.name,
+          roas: weakCampaign.roas ?? 0,
+          accountRoas: snapshot.paidMedia.roas ?? 0,
+          spendShare: weakCampaign.spend / Math.max(snapshot.paidMedia.spend, 1),
+          conversions: weakCampaign.purchases,
+        },
+        sourcePlatforms: ["google_ads", "meta_ads", "microsoft_ads"],
+      });
+    }
   }
 
   if (snapshot.locations.length > 1) {
@@ -480,6 +506,7 @@ export function buildReport(
     execution: AuditReportPayload["execution"];
     reportPeriod?: ReportPeriodRecord | null;
     baselineReport?: AuditReportPayload | null;
+    baselinePeriodKey?: string | null;
     contextEntries?: ContextEntryRecord[];
   },
 ): AuditReportPayload {
@@ -509,7 +536,8 @@ export function buildReport(
         periodStart: options.reportPeriod.periodStart,
         periodEnd: options.reportPeriod.periodEnd,
         baselinePeriodId: options.reportPeriod.baselinePeriodId,
-        baselinePeriodKey: options.baselineReport?.reportPeriod.periodKey ?? null,
+        baselinePeriodKey:
+          options.baselineReport?.reportPeriod.periodKey ?? options.baselinePeriodKey ?? null,
         manualInputs: options.reportPeriod.manualInputs,
       }
     : {
@@ -557,6 +585,7 @@ export function buildReport(
     hypotheses: narrative.hypotheses,
     recommendations: narrative.recommendations,
     confidenceNotes: narrative.confidenceNotes,
+    framework: narrative.framework,
     snapshot,
   };
 }

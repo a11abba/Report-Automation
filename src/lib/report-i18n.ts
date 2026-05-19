@@ -68,8 +68,10 @@ export const reportLabels = {
     ctr: "CTR",
     cpc: "CPC",
     cpm: "CPM",
-    purchases: "Purchases",
+    purchases: "Conversions",
     roas: "ROAS",
+    costPerLead: "Cost per lead",
+    costPerConversion: "Cost per conversion",
     reportFocus: "Report focus",
     reportPeriod: "Report period",
     baselinePeriod: "Baseline period",
@@ -78,6 +80,14 @@ export const reportLabels = {
     hypotheses: "Hypotheses",
     recommendationsNarrative: "Recommendations",
     confidenceNotes: "Confidence Notes",
+    executiveSummary: "Executive Summary",
+    whatHappened: "What Happened",
+    whyItHappened: "Why It Happened",
+    whatWeAreDoing: "What We're Doing About It",
+    ccipaScorecard: "CCIPA Scorecard",
+    acquisitionMix: "Acquisition Mix",
+    paidSpendByCampaign: "Paid Spend by Campaign",
+    aiNarrative: "AI-enhanced narrative",
     noStrengths: "No major strengths were detected in this run.",
     healthyBaseline: "Healthy baseline.",
   },
@@ -115,8 +125,10 @@ export const reportLabels = {
     ctr: "CTR",
     cpc: "CPC",
     cpm: "CPM",
-    purchases: "Compras",
+    purchases: "Conversões",
     roas: "ROAS",
+    costPerLead: "Custo por lead",
+    costPerConversion: "Custo por conversão",
     reportFocus: "Foco do relatório",
     reportPeriod: "Período do relatório",
     baselinePeriod: "Período base",
@@ -125,6 +137,14 @@ export const reportLabels = {
     hypotheses: "Hipóteses",
     recommendationsNarrative: "Recomendações",
     confidenceNotes: "Notas de confiança",
+    executiveSummary: "Resumo executivo",
+    whatHappened: "O que aconteceu",
+    whyItHappened: "Por que aconteceu",
+    whatWeAreDoing: "O que estamos fazendo sobre isso",
+    ccipaScorecard: "Scorecard CCIPA",
+    acquisitionMix: "Mix de aquisição",
+    paidSpendByCampaign: "Investimento por campanha",
+    aiNarrative: "Narrativa aprimorada com IA",
     noStrengths: "Nenhum ponto forte relevante foi detectado nesta execução.",
     healthyBaseline: "Base saudável.",
   },
@@ -162,8 +182,10 @@ export const reportLabels = {
     ctr: "CTR",
     cpc: "CPC",
     cpm: "CPM",
-    purchases: "Compras",
+    purchases: "Conversões",
     roas: "ROAS",
+    costPerLead: "Custo por lead",
+    costPerConversion: "Custo por conversão",
     reportFocus: "Foco do relatório",
     reportPeriod: "Período do relatório",
     baselinePeriod: "Período base",
@@ -172,6 +194,14 @@ export const reportLabels = {
     hypotheses: "Hipóteses",
     recommendationsNarrative: "Recomendações",
     confidenceNotes: "Notas de confiança",
+    executiveSummary: "Resumo executivo",
+    whatHappened: "O que aconteceu",
+    whyItHappened: "Porque aconteceu",
+    whatWeAreDoing: "O que estamos a fazer sobre isto",
+    ccipaScorecard: "Scorecard CCIPA",
+    acquisitionMix: "Mix de aquisição",
+    paidSpendByCampaign: "Investimento por campanha",
+    aiNarrative: "Narrativa melhorada com IA",
     noStrengths: "Não foram detetados pontos fortes relevantes nesta execução.",
     healthyBaseline: "Base saudável.",
   },
@@ -429,13 +459,15 @@ function ptBrMessage(finding: AuditFinding) {
     case "traffic.landing-page":
       return ["Uma landing page com alto tráfego apresenta engajamento fraco.", "Melhore clareza above the fold, velocidade e aderência de intenção nessa página.", [`${text("path")}: ${pct("engagementRate", 0)} de engajamento`]] as const;
     case "paid.no-purchases":
-      return ["Há investimento em mídia paga sem compras atribuídas no período.", "Revise tracking, objetivo de campanha e aderência da oferta antes de escalar o orçamento.", [`Investimento: ${num("spend")}`, `Compras: ${num("purchases")}`]] as const;
+      return ["Há investimento em mídia paga sem conversões atribuídas no período.", "Revise tracking, objetivo de campanha e aderência da oferta antes de escalar o orçamento.", [`Investimento: ${num("spend")}`, `Conversões: ${num("purchases")}`]] as const;
     case "paid.ctr":
       return ["O CTR das campanhas pagas está abaixo do esperado para o volume atual de impressões.", "Teste novos criativos, ângulos de copy e segmentos para elevar a taxa de clique.", [`CTR: ${pct("ctr", 2)}`, `Impressões: ${num("impressions")}`]] as const;
     case "paid.roas":
       return ["O ROAS está abaixo da faixa desejada para o volume investido.", "Realoque verba para campanhas eficientes e revise landing pages, oferta e evento de conversão.", [`ROAS: ${text("roas")}`, `Investimento: ${num("spend")}`]] as const;
     case "paid.concentration":
       return ["A conta está dependente demais de uma única campanha paga.", "Diversifique os conjuntos ativos para reduzir risco de fadiga e volatilidade de performance.", [`${text("campaign")}: ${pct("spendShare", 0)} do investimento`]] as const;
+    case "paid.campaign-efficiency":
+      return ["Uma campanha relevante está consumindo verba com eficiência abaixo da média da conta.", "Revise segmentação, termos, mensagem e landing page dessa campanha antes de manter o investimento atual.", [`${text("campaign")}: ROAS ${text("roas")} versus ${text("accountRoas")} da conta`, `${pct("spendShare", 0)} do investimento total`]] as const;
     case "locations.consistency":
       return ["Há variações relevantes de performance entre as unidades.", "Use a unidade com melhor desempenho como padrão operacional para as demais.", text("locationSummary").split(" || ").filter(Boolean)] as const;
     default:
@@ -509,13 +541,15 @@ function ptPtMessage(finding: AuditFinding) {
     case "traffic.landing-page":
       return ["Uma landing page com muito tráfego apresenta um engagement fraco.", "Melhore a clareza above the fold, a velocidade e o alinhamento de intenção nessa página.", [`${text("path")}: ${pct("engagementRate", 0)} de engagement`]] as const;
     case "paid.no-purchases":
-      return ["Existe investimento em mídia paga sem compras atribuídas no período.", "Reveja o tracking, o objetivo da campanha e o alinhamento da oferta antes de escalar orçamento.", [`Investimento: ${num("spend")}`, `Compras: ${num("purchases")}`]] as const;
+      return ["Existe investimento em mídia paga sem conversões atribuídas no período.", "Reveja o tracking, o objetivo da campanha e o alinhamento da oferta antes de escalar orçamento.", [`Investimento: ${num("spend")}`, `Conversões: ${num("purchases")}`]] as const;
     case "paid.ctr":
       return ["O CTR das campanhas pagas está abaixo do esperado para o volume atual de impressões.", "Teste novos criativos, ângulos de copy e segmentos para elevar a taxa de clique.", [`CTR: ${pct("ctr", 2)}`, `Impressões: ${num("impressions")}`]] as const;
     case "paid.roas":
       return ["O ROAS está abaixo da faixa desejada para o volume investido.", "Realoque orçamento para campanhas eficientes e reveja landing pages, oferta e evento de conversão.", [`ROAS: ${text("roas")}`, `Investimento: ${num("spend")}`]] as const;
     case "paid.concentration":
       return ["A conta está excessivamente dependente de uma única campanha paga.", "Diversifique os conjuntos ativos para reduzir o risco de fadiga e volatilidade de performance.", [`${text("campaign")}: ${pct("spendShare", 0)} do investimento`]] as const;
+    case "paid.campaign-efficiency":
+      return ["Uma campanha relevante está a consumir investimento com eficiência abaixo da média da conta.", "Reveja segmentação, termos, mensagem e landing page dessa campanha antes de manter o nível atual de investimento.", [`${text("campaign")}: ROAS ${text("roas")} versus ${text("accountRoas")} da conta`, `${pct("spendShare", 0)} do investimento total`]] as const;
     case "locations.consistency":
       return ["Existem variações relevantes de performance entre localizações.", "Use a localização com melhor desempenho como padrão operacional para as restantes.", text("locationSummary").split(" || ").filter(Boolean)] as const;
     default:
@@ -589,13 +623,15 @@ function enMessage(finding: AuditFinding) {
     case "traffic.landing-page":
       return ["A high-traffic landing page has weak engagement.", "Improve above-the-fold clarity, load performance, and intent match on that page.", [`${text("path")}: ${pct("engagementRate", 0)} engagement`]] as const;
     case "paid.no-purchases":
-      return ["Paid media spend is generating no attributed purchases in the selected period.", "Review tracking, campaign objective, and offer-to-audience fit before scaling budget.", [`Spend: ${num("spend")}`, `Purchases: ${num("purchases")}`]] as const;
+      return ["Paid media spend is generating no attributed conversions in the selected period.", "Review tracking, campaign objective, and offer-to-audience fit before scaling budget.", [`Spend: ${num("spend")}`, `Conversions: ${num("purchases")}`]] as const;
     case "paid.ctr":
       return ["Paid campaign click-through rate is weak for the current impression volume.", "Test stronger creative angles, hooks, and audiences to improve click intent.", [`CTR: ${pct("ctr", 2)}`, `Impressions: ${num("impressions")}`]] as const;
     case "paid.roas":
       return ["ROAS is below the target band for the current spend level.", "Shift budget toward efficient campaigns and review landing pages, offer framing, and conversion tracking.", [`ROAS: ${text("roas")}`, `Spend: ${num("spend")}`]] as const;
     case "paid.concentration":
       return ["The ad account is over-dependent on a single paid campaign.", "Diversify active campaigns to reduce fatigue risk and performance volatility.", [`${text("campaign")}: ${pct("spendShare", 0)} of spend`]] as const;
+    case "paid.campaign-efficiency":
+      return ["A meaningful campaign is consuming budget with efficiency below the account average.", "Review targeting, search terms, messaging, and landing page fit before keeping the current spend level on this campaign.", [`${text("campaign")}: ROAS ${text("roas")} versus account ROAS ${text("accountRoas")}`, `${pct("spendShare", 0)} of total spend`]] as const;
     case "locations.consistency":
       return ["Performance varies meaningfully across locations.", "Use the strongest location as the operating standard for weaker profiles.", text("locationSummary").split(" || ").filter(Boolean)] as const;
     default:

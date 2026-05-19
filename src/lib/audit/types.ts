@@ -528,6 +528,24 @@ export interface ReportConfidenceNote {
   level: ConfidenceLevel;
 }
 
+export const reportFrameworkStatuses = ["strong", "watch", "weak"] as const;
+export type ReportFrameworkStatus = (typeof reportFrameworkStatuses)[number];
+
+export interface ReportFrameworkPillar {
+  key: "clear" | "concise" | "insightful" | "precise" | "actionable";
+  label: string;
+  status: ReportFrameworkStatus;
+  detail: string;
+}
+
+export interface ReportFrameworkSections {
+  executiveSummary: string;
+  whatHappened: ReportNarrativeItem[];
+  whyItHappened: ReportNarrativeItem[];
+  whatWeAreDoing: ReportNarrativeItem[];
+  ccipaPillars: ReportFrameworkPillar[];
+}
+
 export interface AuditReportPayload {
   accountId: string;
   auditId: string;
@@ -567,6 +585,7 @@ export interface AuditReportPayload {
   hypotheses: ReportNarrativeItem[];
   recommendations: ReportNarrativeItem[];
   confidenceNotes: ReportConfidenceNote[];
+  framework: ReportFrameworkSections;
   snapshot: NormalizedBusinessSnapshot;
 }
 
@@ -616,9 +635,46 @@ export interface ClientRecord {
   primaryDomain: string | null;
   reportLanguage: ReportLanguage;
   reportFocus: ReportFocus;
+  reportIntro: string | null;
+  reportBenchmarks: string | null;
+  referenceReportNotes: string | null;
   monthlyReportEnabled: boolean;
   monthlyReportDay: number | null;
   monthlyReportAutoGenerate: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReportMemoryRecord {
+  id: string;
+  accountId: string;
+  title: string;
+  sourceClientName: string | null;
+  periodLabel: string | null;
+  notes: string | null;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClientReportMemoryLinkRecord {
+  id: string;
+  accountId: string;
+  clientId: string;
+  reportMemoryId: string;
+  createdAt: string;
+}
+
+export const reportFeedbackRatings = ["approve", "revise", "reject"] as const;
+export type ReportFeedbackRating = (typeof reportFeedbackRatings)[number];
+
+export interface ReportFeedbackRecord {
+  id: string;
+  accountId: string;
+  clientId: string;
+  auditId: string;
+  rating: ReportFeedbackRating;
+  notes: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -10,11 +10,18 @@ import {
   type IntegrationRecord,
   type LocationRecord,
   type PlatformKey,
+  type ReportFeedbackRecord,
+  type ReportMemoryRecord,
   type ReportPeriodRecord,
 } from "@/lib/audit/types";
 import type { AuthSession } from "@/lib/auth-session";
 import { canViewAccountBilling, normalizeAppRole } from "@/lib/auth-access";
-import { getConnector, mergeSnapshots, platformCatalog } from "@/lib/connectors";
+import {
+  getConnector,
+  mergeSnapshots,
+  platformCatalog,
+  type PlatformConnector,
+} from "@/lib/connectors";
 import {
   buildGoogleOAuthUrl,
   consumeGoogleOAuthCallback,
@@ -27,13 +34,15 @@ import {
   getMicrosoftScopes,
   refreshMicrosoftAccessToken,
 } from "@/lib/microsoft-auth";
+import { enhanceReportWithAi } from "@/lib/report-ai";
 import { resolveScheduledMonthlyPeriod } from "@/lib/report-scheduler-utils";
 import { buildReport, evaluateRules, rulePackCatalog } from "@/lib/rules";
 import { getPdfRendererStatus } from "@/lib/reports";
-import { emptyReportPeriodManualInputs } from "@/lib/report-period-utils";
+import { deriveMonthRange, emptyReportPeriodManualInputs } from "@/lib/report-period-utils";
 import { getStore } from "@/lib/storage";
 import {
   createIntegrationWithVault,
+  deleteIntegrationWithVault,
   hydrateIntegrationForExecution,
   updateIntegrationWithVault,
 } from "@/services/integrations";
@@ -76,6 +85,19 @@ export class AuditPreflightError extends Error {
     this.code = code;
     this.status = status;
   }
+}
+
+function dedupeExcludedIntegrations(
+  items: NonNullable<AuditScope["excludedIntegrations"]>,
+) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) {
+      return false;
+    }
+    seen.add(item.id);
+    return true;
+  });
 }
 
 async function getIntegrationExecutionState(client: ClientRecord, integration: IntegrationRecord) {
@@ -166,12 +188,14 @@ async function getReportPeriodBundle(
 ): Promise<{
   reportPeriod: ReportPeriodRecord | null;
   contextEntries: ContextEntryRecord[];
+  baselinePeriod: ReportPeriodRecord | null;
   baselineReport: AuditReportPayload | null;
 }> {
   if (!reportPeriodId) {
     return {
       reportPeriod: null,
       contextEntries: [],
+      baselinePeriod: null,
       baselineReport: null,
     };
   }
@@ -181,6 +205,7 @@ async function getReportPeriodBundle(
     return {
       reportPeriod: null,
       contextEntries: [],
+      baselinePeriod: null,
       baselineReport: null,
     };
   }
@@ -194,6 +219,7 @@ async function getReportPeriodBundle(
   return {
     reportPeriod,
     contextEntries,
+    baselinePeriod,
     baselineReport,
   };
 }
@@ -256,10 +282,13 @@ export async function listDashboardData(
   viewer: Pick<AuthSession, "role" | "accountId">,
 ) {
   const store = await getStore();
-  const [clients, audits, accounts] = await Promise.all([
+  const [clients, audits, accounts, reportMemories] = await Promise.all([
     store.listClients(),
     store.listAudits(),
     store.listAccounts(),
+    viewer.role === "platform_admin"
+      ? store.listReportMemories()
+      : store.listReportMemories(viewer.accountId),
   ]);
   const visibleClients =
     viewer.role === "platform_admin"
@@ -300,6 +329,10 @@ export async function listDashboardData(
         }),
       );
       const reportPeriods = await store.listReportPeriodsByClient(client.id);
+      const [clientReportMemories, clientReportFeedback] = await Promise.all([
+        store.listReportMemoriesByClient(client.id),
+        store.listReportFeedbackByClient(client.id),
+      ]);
       const reportPeriodsWithContext = await Promise.all(
         reportPeriods.map(async (reportPeriod) => {
           const [contextEntries, baselinePeriod] = await Promise.all([
@@ -318,6 +351,8 @@ export async function listDashboardData(
         integrations: integrationStates,
         locations: await store.listLocationsByClient(client.id),
         audits: visibleAudits.filter((audit) => audit.clientId === client.id).slice(0, 5),
+        reportMemories: clientReportMemories,
+        reportFeedback: clientReportFeedback.slice(0, 10),
         reportPeriods: reportPeriodsWithContext,
       };
     }),
@@ -373,6 +408,7 @@ export async function listDashboardData(
           }
         : currentAccount,
     clients: clientsWithRelations,
+    reportMemories,
     recentAudits: visibleAudits.slice(0, 10),
     pdfRenderer: getPdfRendererStatus(),
   };
@@ -415,18 +451,77 @@ export async function runAudit(auditId: string) {
     detail: { integrationCount: integrations.length },
   });
   try {
-    const snapshots = await Promise.all(
-      integrations.map(async (integration) => {
+    const runtimeExcludedIntegrations: NonNullable<AuditScope["excludedIntegrations"]> = [];
+    const collected: Array<{
+      integration: IntegrationRecord;
+      snapshot: Awaited<ReturnType<PlatformConnector["fetchSnapshot"]>>;
+    }> = [];
+
+    for (const integration of integrations) {
+      try {
         const executableIntegration = await prepareIntegrationForExecution(integration);
         const connector = getConnector(executableIntegration.platformKey);
-        return connector.fetchSnapshot({
+        const snapshot = await connector.fetchSnapshot({
           client,
           integration: executableIntegration,
           requestedCapabilities: connector.capabilities(),
           dateRange,
         });
-      }),
-    );
+        collected.push({
+          integration: executableIntegration,
+          snapshot,
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "Data collection failed.";
+        runtimeExcludedIntegrations.push({
+          id: integration.id,
+          label: integration.displayName,
+          platformKey: integration.platformKey,
+          reason,
+        });
+        await logEvent({
+          auditId,
+          level: "warn",
+          code: "audit.integration_skipped",
+          message: `${integration.displayName} was skipped during audit execution.`,
+          detail: {
+            integrationId: integration.id,
+            platformKey: integration.platformKey,
+            reason,
+          },
+        });
+      }
+    }
+
+    if (collected.length === 0) {
+      const failureMessage =
+        runtimeExcludedIntegrations.length === 1
+          ? `${runtimeExcludedIntegrations[0].label}: ${runtimeExcludedIntegrations[0].reason}`
+          : "All live integrations failed during data collection.";
+      throw new Error(failureMessage);
+    }
+
+    const effectiveExcludedIntegrations = dedupeExcludedIntegrations([
+      ...(audit.scope?.excludedIntegrations ?? []),
+      ...runtimeExcludedIntegrations,
+    ]);
+    const effectiveIntegrations = collected.map((item) => item.integration);
+    const effectiveScope =
+      effectiveExcludedIntegrations.length === (audit.scope?.excludedIntegrations?.length ?? 0)
+        ? audit.scope
+        : {
+            ...(audit.scope ?? {}),
+            excludedIntegrations: effectiveExcludedIntegrations,
+          };
+
+    if (effectiveScope !== audit.scope || effectiveIntegrations.length !== integrations.length) {
+      await store.updateAudit(auditId, {
+        integrationIds: effectiveIntegrations.map((integration) => integration.id),
+        scope: effectiveScope,
+      });
+    }
+
+    const snapshots = collected.map((item) => item.snapshot);
     const merged = mergeSnapshots(client, snapshots);
     const storedLocations = await store.listLocationsByClient(client.id);
     if (storedLocations.length > 0) {
@@ -468,24 +563,56 @@ export async function runAudit(auditId: string) {
     }
     const findings = evaluateRules(merged);
     const reportPeriodBundle = await getReportPeriodBundle(audit.scope?.reportPeriodId);
+    const [reportMemories, reportFeedback] = await Promise.all([
+      store.listReportMemoriesByClient(client.id),
+      store.listReportFeedbackByClient(client.id),
+    ]);
     const report = buildReport(auditId, client, merged, findings, {
       execution: {
-        includedIntegrations: integrations.map((integration) => ({
+        includedIntegrations: effectiveIntegrations.map((integration) => ({
           id: integration.id,
           label: integration.displayName,
           platformKey: integration.platformKey,
         })),
-        excludedIntegrations: audit.scope?.excludedIntegrations ?? [],
+        excludedIntegrations: effectiveExcludedIntegrations,
       },
       reportPeriod: reportPeriodBundle.reportPeriod,
       baselineReport: reportPeriodBundle.baselineReport,
+      baselinePeriodKey: reportPeriodBundle.baselinePeriod?.periodKey ?? null,
       contextEntries: reportPeriodBundle.contextEntries,
     });
-    await store.saveReport(auditId, report);
+    let finalReport = report;
+    try {
+      finalReport = await enhanceReportWithAi(report, {
+        reportIntro: client.reportIntro,
+        reportBenchmarks: client.reportBenchmarks,
+        referenceReportNotes: client.referenceReportNotes,
+        reportMemories,
+        reportFeedback,
+      });
+      if (finalReport !== report) {
+        await logEvent({
+          auditId,
+          code: "audit.ai_framework_applied",
+          message: "AI report framework synthesis applied.",
+          detail: {
+            frameworkSummary: finalReport.framework.executiveSummary,
+          },
+        });
+      }
+    } catch (error) {
+      await logEvent({
+        auditId,
+        level: "warn",
+        code: "audit.ai_framework_failed",
+        message: error instanceof Error ? error.message : "AI report framework synthesis failed.",
+      });
+    }
+    await store.saveReport(auditId, finalReport);
     await store.updateAudit(auditId, {
       status: "completed",
-      score: report.score,
-      grade: report.grade,
+      score: finalReport.score,
+      grade: finalReport.grade,
       completedAt: new Date().toISOString(),
       errorMessage: null,
     });
@@ -493,13 +620,13 @@ export async function runAudit(auditId: string) {
       await store.updateReportPeriod(audit.scope.reportPeriodId, {
         status: "completed",
         auditId,
-        generatedAt: report.generatedAt,
+        generatedAt: finalReport.generatedAt,
       });
     }
     if (auditJob) {
       await store.updateJob(auditJob.id, {
         status: "completed",
-        result: { score: report.score, grade: report.grade },
+        result: { score: finalReport.score, grade: finalReport.grade },
         completedAt: new Date().toISOString(),
       });
     }
@@ -507,9 +634,9 @@ export async function runAudit(auditId: string) {
       auditId,
       code: "audit.completed",
       message: `Audit ${auditId} completed.`,
-      detail: { score: report.score, grade: report.grade },
+      detail: { score: finalReport.score, grade: finalReport.grade },
     });
-    return report;
+    return finalReport;
   } catch (error) {
     await store.updateAudit(auditId, {
       status: "failed",
@@ -650,17 +777,96 @@ export async function createClientRecord(
   accountId: string,
   input: Pick<
     ClientRecord,
-    "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus"
+    | "name"
+    | "industry"
+    | "industryLabelPt"
+    | "operatingModel"
+    | "primaryDomain"
+    | "reportLanguage"
+    | "reportFocus"
+    | "reportIntro"
+    | "reportBenchmarks"
+    | "referenceReportNotes"
   >,
 ) {
   const store = await getStore();
   return store.createClient(accountId, input);
 }
 
+export async function listReportMemoriesForAccount(accountId?: string) {
+  const store = await getStore();
+  return store.listReportMemories(accountId);
+}
+
+export async function createReportMemoryRecord(
+  accountId: string,
+  input: Pick<
+    ReportMemoryRecord,
+    "title" | "sourceClientName" | "periodLabel" | "notes" | "content"
+  >,
+) {
+  const store = await getStore();
+  return store.createReportMemory(accountId, input);
+}
+
+export async function deleteReportMemoryRecord(id: string) {
+  const store = await getStore();
+  return store.deleteReportMemory(id);
+}
+
+export async function listReportMemoriesForClient(clientId: string) {
+  const store = await getStore();
+  return store.listReportMemoriesByClient(clientId);
+}
+
+export async function attachReportMemoryRecordToClient(
+  clientId: string,
+  reportMemoryId: string,
+) {
+  const store = await getStore();
+  return store.attachReportMemoryToClient(clientId, reportMemoryId);
+}
+
+export async function detachReportMemoryRecordFromClient(
+  clientId: string,
+  reportMemoryId: string,
+) {
+  const store = await getStore();
+  return store.detachReportMemoryFromClient(clientId, reportMemoryId);
+}
+
+export async function listReportFeedbackForAudit(auditId: string) {
+  const store = await getStore();
+  return store.listReportFeedbackByAudit(auditId);
+}
+
+export async function createReportFeedbackRecord(
+  auditId: string,
+  input: Pick<ReportFeedbackRecord, "rating" | "notes">,
+) {
+  const store = await getStore();
+  return store.createReportFeedback(auditId, input);
+}
+
 export async function updateClientRecord(
   clientId: string,
   input: Partial<
-    Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus" | "monthlyReportEnabled" | "monthlyReportDay" | "monthlyReportAutoGenerate">
+    Pick<
+      ClientRecord,
+      | "name"
+      | "industry"
+      | "industryLabelPt"
+      | "operatingModel"
+      | "primaryDomain"
+      | "reportLanguage"
+      | "reportFocus"
+      | "reportIntro"
+      | "reportBenchmarks"
+      | "referenceReportNotes"
+      | "monthlyReportEnabled"
+      | "monthlyReportDay"
+      | "monthlyReportAutoGenerate"
+    >
   >,
 ) {
   const store = await getStore();
@@ -730,6 +936,24 @@ export async function createReportPeriodRecord(
     periodEnd: input.periodEnd,
     baselinePeriodId: input.baselinePeriodId ?? null,
     manualInputs: emptyReportPeriodManualInputs(),
+  });
+}
+
+export async function ensureReportPeriodForMonth(clientId: string, periodKey: string) {
+  const store = await getStore();
+  const existing = (await store.listReportPeriodsByClient(clientId)).find(
+    (reportPeriod) => reportPeriod.periodKey === periodKey,
+  );
+  if (existing) {
+    return existing;
+  }
+
+  const range = deriveMonthRange(periodKey);
+  return createReportPeriodRecord(clientId, {
+    periodKey,
+    periodStart: range.start,
+    periodEnd: range.end,
+    baselinePeriodId: null,
   });
 }
 
@@ -1004,6 +1228,10 @@ export async function updateIntegrationRecord(
   patch: Partial<Pick<IntegrationRecord, "displayName" | "credentials" | "settings">>,
 ) {
   return updateIntegrationWithVault(integrationId, patch);
+}
+
+export async function deleteIntegrationRecord(integrationId: string) {
+  return deleteIntegrationWithVault(integrationId);
 }
 
 export async function syncLocationsForClient(clientId: string) {

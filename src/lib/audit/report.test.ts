@@ -14,6 +14,9 @@ const client: ClientRecord = {
   primaryDomain: "https://aurora.example",
   reportLanguage: "pt-PT",
   reportFocus: "full_funnel",
+  reportIntro: null,
+  reportBenchmarks: null,
+  referenceReportNotes: null,
   monthlyReportEnabled: false,
   monthlyReportDay: null,
   monthlyReportAutoGenerate: true,
@@ -96,6 +99,9 @@ describe("report rendering", () => {
     const englishClient: ClientRecord = {
       ...client,
       reportLanguage: "en",
+      reportIntro: null,
+      reportBenchmarks: null,
+      referenceReportNotes: null,
     };
     const snapshots = await Promise.all(
       integrations.map((integration) =>

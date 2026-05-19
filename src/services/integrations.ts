@@ -2,6 +2,7 @@ import type { IntegrationCredentials, IntegrationRecord } from "@/lib/audit/type
 import { getStore } from "@/lib/storage";
 import {
   hydrateCredentialSecret,
+  removeCredentialSecret,
   storeCredentialSecret,
 } from "./credential-vault";
 
@@ -45,6 +46,18 @@ export async function updateIntegrationWithVault(
     settings: patch.settings,
     credentials: nextCredentials,
   });
+}
+
+export async function deleteIntegrationWithVault(id: string) {
+  const store = await getStore();
+  const current = await store.getIntegration(id);
+  if (!current) {
+    return null;
+  }
+
+  const deleted = await store.deleteIntegration(id);
+  await removeCredentialSecret(current.credentials.secretRef);
+  return deleted;
 }
 
 export async function hydrateIntegrationForExecution<T extends IntegrationRecord>(integration: T): Promise<T> {

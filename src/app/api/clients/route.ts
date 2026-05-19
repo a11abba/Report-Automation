@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { createClientRecord } from "@/lib/audit-engine";
+import { attachReportMemoryRecordToClient, createClientRecord } from "@/lib/audit-engine";
 import { canManagePlatform } from "@/lib/auth-access";
 import { reportFocuses, reportLanguages } from "@/lib/audit/types";
 import { assertSafeAuditUrl } from "@/lib/audit-url";
@@ -16,6 +16,10 @@ const createClientSchema = z.object({
   primaryDomain: z.string().url().nullable().optional(),
   reportLanguage: z.enum(reportLanguages).default("pt-BR"),
   reportFocus: z.enum(reportFocuses).default("full_funnel"),
+  reportIntro: z.string().min(2).nullable().optional(),
+  reportBenchmarks: z.string().min(2).nullable().optional(),
+  referenceReportNotes: z.string().min(2).nullable().optional(),
+  initialReportMemoryId: z.string().min(1).nullable().optional(),
 });
 
 export async function GET() {
@@ -47,7 +51,13 @@ export async function POST(request: Request) {
       primaryDomain,
       reportLanguage: body.reportLanguage,
       reportFocus: body.reportFocus,
+      reportIntro: body.reportIntro ?? null,
+      reportBenchmarks: body.reportBenchmarks ?? null,
+      referenceReportNotes: body.referenceReportNotes ?? null,
     });
+    if (body.initialReportMemoryId) {
+      await attachReportMemoryRecordToClient(client.id, body.initialReportMemoryId);
+    }
     return NextResponse.json({ client }, { status: 201 });
   } catch (error) {
     return NextResponse.json(

@@ -3,10 +3,13 @@ import type {
   AuditReportPayload,
   ContextEntryRecord,
   NormalizedBusinessSnapshot,
+  ReportFrameworkPillar,
+  ReportFrameworkSections,
   ReportLanguage,
   ReportPeriodReference,
   ReportNarrativeItem,
 } from "@/lib/audit/types";
+import { costPerConversion, inferObjectiveFromContextEntries } from "./report-objective";
 
 function formatNumber(locale: ReportLanguage, value: number | null | undefined, digits = 0) {
   if (value == null) return "N/A";
@@ -60,6 +63,28 @@ function uniqueItems(items: ReportNarrativeItem[]) {
   });
 }
 
+function uniqueStrings(items: string[]) {
+  return [...new Set(items.filter(Boolean))];
+}
+
+function isInternalBriefingContext(entry: ContextEntryRecord) {
+  if (entry.entryType !== "note") {
+    return false;
+  }
+
+  const text = entry.text.trim().toLowerCase();
+  return (
+    text.startsWith("remember that") ||
+    text.startsWith("remember ") ||
+    text.startsWith("keep in mind") ||
+    text.startsWith("note that") ||
+    text.startsWith("internal note") ||
+    text.startsWith("lembre") ||
+    text.startsWith("lembrar") ||
+    text.startsWith("considere")
+  );
+}
+
 function contextTypeLabel(locale: ReportLanguage, type: ContextEntryRecord["entryType"]) {
   const labels = {
     en: {
@@ -97,15 +122,48 @@ function contextTypeLabel(locale: ReportLanguage, type: ContextEntryRecord["entr
   return labels[locale][type];
 }
 
+function frameworkPillarLabel(
+  locale: ReportLanguage,
+  key: ReportFrameworkPillar["key"],
+) {
+  const labels = {
+    en: {
+      clear: "Clear",
+      concise: "Concise",
+      insightful: "Insightful",
+      precise: "Precise",
+      actionable: "Actionable",
+    },
+    "pt-BR": {
+      clear: "Claro",
+      concise: "Conciso",
+      insightful: "Insightful",
+      precise: "Preciso",
+      actionable: "Acionável",
+    },
+    "pt-PT": {
+      clear: "Claro",
+      concise: "Conciso",
+      insightful: "Insightful",
+      precise: "Preciso",
+      actionable: "Acionável",
+    },
+  } as const;
+
+  return labels[locale][key];
+}
+
 function buildDataFacts(
   locale: ReportLanguage,
   snapshot: NormalizedBusinessSnapshot,
   reportPeriod: ReportPeriodReference,
   baselineReport: AuditReportPayload | null,
+  contextEntries: ContextEntryRecord[],
 ) {
   const items: ReportNarrativeItem[] = [];
   const baselineSnapshot = baselineReport?.snapshot ?? null;
   const baselineInputs = baselineReport?.reportPeriod.manualInputs ?? null;
+  const objective = inferObjectiveFromContextEntries(contextEntries);
 
   if (snapshot.trafficAttribution) {
     const delta = formatDelta(
@@ -130,17 +188,25 @@ function buildDataFacts(
 
   if (snapshot.paidMedia) {
     const delta = formatDelta(locale, snapshot.paidMedia.spend, baselineSnapshot?.paidMedia?.spend);
+    const cpl = costPerConversion(snapshot.paidMedia);
     const detail =
-      locale === "en"
-        ? `Paid media spend reached ${formatNumber(locale, snapshot.paidMedia.spend, 2)} with ${formatNumber(locale, snapshot.paidMedia.purchases)} purchases and ROAS ${formatNumber(locale, snapshot.paidMedia.roas, 2)}${delta ? `, ${directionLabel(locale, delta.value)} ${delta.label} vs baseline spend.` : "."}`
-        : `A mídia paga consumiu ${formatNumber(locale, snapshot.paidMedia.spend, 2)} com ${formatNumber(locale, snapshot.paidMedia.purchases)} compras e ROAS ${formatNumber(locale, snapshot.paidMedia.roas, 2)}${delta ? `, com ${directionLabel(locale, delta.value)} de ${delta.label} sobre o investimento base.` : "."}`;
+      objective.kind === "lead_generation"
+        ? locale === "en"
+          ? `Paid media generated ${formatNumber(locale, snapshot.paidMedia.purchases)} ${objective.primaryConversionLabel.toLowerCase()} from ${formatNumber(locale, snapshot.paidMedia.clicks)} clicks on ${formatNumber(locale, snapshot.paidMedia.spend, 2)} in spend, with cost per lead at ${formatNumber(locale, cpl, 2)}${delta ? `, and spend ${directionLabel(locale, delta.value)} ${delta.label} vs baseline.` : "."}`
+          : `A mídia paga gerou ${formatNumber(locale, snapshot.paidMedia.purchases)} ${objective.primaryConversionLabel.toLowerCase()} a partir de ${formatNumber(locale, snapshot.paidMedia.clicks)} cliques, com ${formatNumber(locale, snapshot.paidMedia.spend, 2)} de investimento e custo por lead em ${formatNumber(locale, cpl, 2)}${delta ? `, com investimento em ${directionLabel(locale, delta.value)} de ${delta.label} face ao baseline.` : "."}`
+        : locale === "en"
+          ? `Paid media spend reached ${formatNumber(locale, snapshot.paidMedia.spend, 2)} with ${formatNumber(locale, snapshot.paidMedia.purchases)} conversions, ${formatNumber(locale, snapshot.paidMedia.clicks)} clicks, and ROAS ${formatNumber(locale, snapshot.paidMedia.roas, 2)}${delta ? `, ${directionLabel(locale, delta.value)} ${delta.label} vs baseline spend.` : "."}`
+          : `A mídia paga consumiu ${formatNumber(locale, snapshot.paidMedia.spend, 2)} com ${formatNumber(locale, snapshot.paidMedia.purchases)} conversões, ${formatNumber(locale, snapshot.paidMedia.clicks)} cliques e ROAS ${formatNumber(locale, snapshot.paidMedia.roas, 2)}${delta ? `, com ${directionLabel(locale, delta.value)} de ${delta.label} sobre o investimento base.` : "."}`;
     items.push({
       title: locale === "en" ? "Paid media output" : "Resultado de mídia paga",
       detail,
       evidence: [
         `Spend: ${formatNumber(locale, snapshot.paidMedia.spend, 2)}`,
-        `Purchases: ${formatNumber(locale, snapshot.paidMedia.purchases)}`,
-        `ROAS: ${formatNumber(locale, snapshot.paidMedia.roas, 2)}`,
+        `Conversions: ${formatNumber(locale, snapshot.paidMedia.purchases)}`,
+        `Clicks: ${formatNumber(locale, snapshot.paidMedia.clicks)}`,
+        ...(objective.kind === "lead_generation"
+          ? [`Cost per lead: ${formatNumber(locale, cpl, 2)}`]
+          : [`ROAS: ${formatNumber(locale, snapshot.paidMedia.roas, 2)}`]),
       ],
     });
   }
@@ -277,15 +343,15 @@ function buildHypotheses(
 
   if (items.length === 0 && baselineReport) {
     items.push({
-      title: locale === "en" ? "Open investigation point" : "Ponto em investigacao",
+      title: locale === "en" ? "Limited contextual evidence" : "Contexto operacional limitado",
       detail:
         locale === "en"
-          ? "The data changed versus the previous period, but there is not enough logged context yet to explain causality with confidence."
-          : "Os dados mudaram em relacao ao período anterior, mas ainda nao existe contexto suficiente registrado para explicar a causalidade com seguranca.",
+          ? "Performance changed versus the comparison month, but no material operational changes were logged for this period."
+          : "A performance mudou em relacao ao mês comparativo, mas nao houve contexto operacional suficiente registrado para explicar a mudança.",
       evidence: [
         locale === "en"
-          ? "Review campaign changes, tracking notes, landing page releases, and sales operations for the period."
-          : "Revise mudancas de campanha, tracking, landing pages e operacao comercial do período.",
+          ? "Add campaign, tracking, landing page, and sales notes in future months to improve the narrative."
+          : "Registre notas de campanha, tracking, landing page e operacao comercial nos próximos meses para enriquecer a narrativa.",
       ],
     });
   }
@@ -315,6 +381,197 @@ function buildRecommendations(locale: ReportLanguage, findings: AuditFinding[], 
   }
 
   return uniqueItems(items).slice(0, 4);
+}
+
+function buildWhatHappened(
+  locale: ReportLanguage,
+  dataFacts: ReportNarrativeItem[],
+  findings: AuditFinding[],
+) {
+  const items = [...dataFacts];
+
+  if (items.length < 3) {
+    for (const finding of findings.filter((finding) => finding.status !== "passing").slice(0, 2)) {
+      items.push({
+        title: locale === "en" ? "Performance signal" : "Sinal de performance",
+        detail: finding.summary,
+        evidence: finding.evidence.slice(0, 3),
+      });
+    }
+  }
+
+  return uniqueItems(items).slice(0, 3);
+}
+
+function buildWhyItHappened(
+  locale: ReportLanguage,
+  hypotheses: ReportNarrativeItem[],
+  contextEntries: ContextEntryRecord[],
+) {
+  const items = [...hypotheses];
+  const visibleContextEntries = contextEntries.filter((entry) => !isInternalBriefingContext(entry));
+
+  if (items.length === 0) {
+    for (const entry of visibleContextEntries.slice(0, 2)) {
+      items.push({
+        title: contextTypeLabel(locale, entry.entryType),
+        detail: entry.text,
+        evidence: uniqueStrings([
+          entry.channel ? `Channel: ${entry.channel}` : "",
+          entry.source ? `Source: ${entry.source}` : "",
+          entry.campaignReference ? `Campaign: ${entry.campaignReference}` : "",
+        ]),
+      });
+    }
+  }
+
+  if (items.length === 0 && contextEntries.length > 0) {
+    items.push({
+      title: locale === "en" ? "Operational priorities" : "Prioridades operacionais",
+      detail:
+        locale === "en"
+          ? "Internal operating guidance and priority changes were considered in the analysis, but only client-relevant conclusions are surfaced here."
+          : "Orientações operacionais internas e mudanças de prioridade foram consideradas na análise, mas apenas conclusões relevantes para o cliente são apresentadas aqui.",
+      evidence: uniqueStrings(
+        contextEntries
+          .map((entry) => contextTypeLabel(locale, entry.entryType))
+          .slice(0, 3),
+      ),
+    });
+  }
+
+  return uniqueItems(items).slice(0, 3);
+}
+
+function buildWhatWeAreDoing(
+  locale: ReportLanguage,
+  recommendations: ReportNarrativeItem[],
+  findings: AuditFinding[],
+) {
+  const items = [...recommendations];
+
+  if (items.length === 0) {
+    for (const finding of findings.filter((finding) => finding.status !== "passing").slice(0, 3)) {
+      items.push({
+        title:
+          locale === "en" ? "Recommended next move" : "Próximo passo recomendado",
+        detail: finding.recommendedAction,
+        evidence: finding.evidence.slice(0, 2),
+      });
+    }
+  }
+
+  if (items.length === 0) {
+    items.push({
+      title: locale === "en" ? "Next reporting action" : "Próxima ação do relatório",
+      detail:
+        locale === "en"
+          ? "Keep validating conversion quality, budget allocation, and campaign efficiency before the next monthly report is generated."
+          : "Continue validando a qualidade das conversões, a alocação de verba e a eficiência das campanhas antes da próxima geração mensal.",
+      evidence: [],
+    });
+  }
+
+  return uniqueItems(items).slice(0, 3);
+}
+
+function buildExecutiveSummary(
+  locale: ReportLanguage,
+  whatHappened: ReportNarrativeItem[],
+  whyItHappened: ReportNarrativeItem[],
+  whatWeAreDoing: ReportNarrativeItem[],
+) {
+  const resultSentence = whatHappened[0]?.detail ?? "";
+  const whySentence = whyItHappened[0]?.detail ?? "";
+  const actionSentence = whatWeAreDoing[0]?.detail ?? "";
+
+  if (locale === "en") {
+    return [resultSentence, whySentence, actionSentence]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  return [resultSentence, whySentence, actionSentence]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function buildCcipaPillars(
+  locale: ReportLanguage,
+  reportPeriod: ReportPeriodReference,
+  baselineReport: AuditReportPayload | null,
+  contextEntries: ContextEntryRecord[],
+  confidenceNotes: AuditReportPayload["confidenceNotes"],
+  whatHappened: ReportNarrativeItem[],
+  whyItHappened: ReportNarrativeItem[],
+  whatWeAreDoing: ReportNarrativeItem[],
+) {
+  const hasDemoWarning = confidenceNotes.some(
+    (note) => note.level === "warning" && /demo|simulad/i.test(note.detail),
+  );
+  const hasPrecisionInputs =
+    reportPeriod.manualInputs?.leads != null ||
+    reportPeriod.manualInputs?.revenue != null ||
+    reportPeriod.manualInputs?.sales != null;
+
+  const pillars: ReportFrameworkPillar[] = [
+    {
+      key: "clear",
+      label: frameworkPillarLabel(locale, "clear"),
+      status:
+        whatHappened.length > 0 && whyItHappened.length > 0 && whatWeAreDoing.length > 0
+          ? "strong"
+          : "watch",
+      detail:
+        locale === "en"
+          ? "The report is organized around result, explanation, and next action."
+          : "O relatório está organizado em resultado, explicação e próximo passo.",
+    },
+    {
+      key: "concise",
+      label: frameworkPillarLabel(locale, "concise"),
+      status:
+        whatHappened.length <= 3 && whyItHappened.length <= 3 && whatWeAreDoing.length <= 3
+          ? "strong"
+          : "watch",
+      detail:
+        locale === "en"
+          ? "Only the most relevant performance points are highlighted in each section."
+          : "Cada seção prioriza apenas os pontos de performance mais relevantes.",
+    },
+    {
+      key: "insightful",
+      label: frameworkPillarLabel(locale, "insightful"),
+      status:
+        whyItHappened.length > 0 && (contextEntries.length > 0 || Boolean(baselineReport))
+          ? "strong"
+          : "watch",
+      detail:
+        locale === "en"
+          ? "The explanation layer connects observed changes to context and likely drivers."
+          : "A camada de explicação conecta a variação observada ao contexto e aos drivers prováveis.",
+    },
+    {
+      key: "precise",
+      label: frameworkPillarLabel(locale, "precise"),
+      status: !hasDemoWarning && hasPrecisionInputs ? "strong" : "watch",
+      detail:
+        locale === "en"
+          ? "Precision improves when exact business inputs and live data are available."
+          : "A precisão aumenta quando existem inputs exatos de negócio e dados live disponíveis.",
+    },
+    {
+      key: "actionable",
+      label: frameworkPillarLabel(locale, "actionable"),
+      status: whatWeAreDoing.length > 0 ? "strong" : "weak",
+      detail:
+        locale === "en"
+          ? "Recommendations are framed as concrete next moves tied to the evidence."
+          : "As recomendações são apresentadas como próximos passos concretos ligados às evidências.",
+    },
+  ];
+
+  return pillars;
 }
 
 function buildConfidenceNotes(
@@ -349,11 +606,22 @@ function buildConfidenceNotes(
 
   if (!baselineReport) {
     items.push({
-      label: locale === "en" ? "No baseline period" : "Sem período base",
+      label:
+        locale === "en"
+          ? reportPeriod.baselinePeriodKey
+            ? "Comparison month not generated yet"
+            : "No comparison month"
+          : reportPeriod.baselinePeriodKey
+            ? "Mês comparativo ainda não gerado"
+            : "Sem mês comparativo",
       detail:
         locale === "en"
-          ? "Month-over-month comparisons are limited because no baseline report period was linked."
-          : "As comparacoes mes contra mes estao limitadas porque nenhum período base foi associado.",
+          ? reportPeriod.baselinePeriodKey
+            ? `The comparison month ${reportPeriod.baselinePeriodKey} is linked, but its report has not been generated yet, so month-over-month commentary is still limited.`
+            : "Month-over-month comparisons are limited because no comparison month was selected."
+          : reportPeriod.baselinePeriodKey
+            ? `O mês comparativo ${reportPeriod.baselinePeriodKey} está vinculado, mas o relatório dele ainda não foi gerado, então a leitura mês contra mês continua limitada.`
+            : "As comparacoes mes contra mes estao limitadas porque nenhum mês comparativo foi selecionado.",
       level: "warning",
     });
   }
@@ -388,17 +656,71 @@ export function buildNarrativeSections(input: {
   baselineReport: AuditReportPayload | null;
   contextEntries: ContextEntryRecord[];
 }) {
-  return {
-    dataFacts: buildDataFacts(input.locale, input.snapshot, input.reportPeriod, input.baselineReport),
-    providedContext: buildProvidedContext(input.locale, input.contextEntries),
-    hypotheses: buildHypotheses(input.locale, input.snapshot, input.baselineReport, input.contextEntries),
-    recommendations: buildRecommendations(input.locale, input.findings, input.contextEntries),
-    confidenceNotes: buildConfidenceNotes(
+  const dataFacts = buildDataFacts(
+    input.locale,
+    input.snapshot,
+    input.reportPeriod,
+    input.baselineReport,
+    input.contextEntries,
+  );
+  const providedContext = buildProvidedContext(input.locale, input.contextEntries);
+  const hypotheses = buildHypotheses(
+    input.locale,
+    input.snapshot,
+    input.baselineReport,
+    input.contextEntries,
+  );
+  const recommendations = buildRecommendations(
+    input.locale,
+    input.findings,
+    input.contextEntries,
+  );
+  const confidenceNotes = buildConfidenceNotes(
+    input.locale,
+    input.snapshot,
+    input.reportPeriod,
+    input.baselineReport,
+    input.contextEntries,
+  );
+  const whatHappened = buildWhatHappened(input.locale, dataFacts, input.findings);
+  const whyItHappened = buildWhyItHappened(
+    input.locale,
+    hypotheses,
+    input.contextEntries,
+  );
+  const whatWeAreDoing = buildWhatWeAreDoing(
+    input.locale,
+    recommendations,
+    input.findings,
+  );
+  const framework: ReportFrameworkSections = {
+    executiveSummary: buildExecutiveSummary(
       input.locale,
-      input.snapshot,
+      whatHappened,
+      whyItHappened,
+      whatWeAreDoing,
+    ),
+    whatHappened,
+    whyItHappened,
+    whatWeAreDoing,
+    ccipaPillars: buildCcipaPillars(
+      input.locale,
       input.reportPeriod,
       input.baselineReport,
       input.contextEntries,
+      confidenceNotes,
+      whatHappened,
+      whyItHappened,
+      whatWeAreDoing,
     ),
+  };
+
+  return {
+    dataFacts,
+    providedContext,
+    hypotheses,
+    recommendations,
+    confidenceNotes,
+    framework,
   };
 }

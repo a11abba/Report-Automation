@@ -30,6 +30,24 @@ export async function loadClientForViewer(viewer: NonNullable<Awaited<ReturnType
   return { client, response: null };
 }
 
+export async function loadReportMemoryForViewer(
+  viewer: NonNullable<Awaited<ReturnType<typeof getAuthSession>>>,
+  reportMemoryId: string,
+) {
+  const store = await getStore();
+  const reportMemory = await store.getReportMemory(reportMemoryId);
+  if (!reportMemory) {
+    return {
+      reportMemory: null,
+      response: NextResponse.json({ error: "Report memory not found." }, { status: 404 }),
+    };
+  }
+  if (viewer.role !== "platform_admin" && reportMemory.accountId !== viewer.accountId) {
+    return { reportMemory: null, response: forbiddenResponse() };
+  }
+  return { reportMemory, response: null };
+}
+
 export async function loadAuditForViewer(viewer: NonNullable<Awaited<ReturnType<typeof getAuthSession>>>, auditId: string) {
   const store = await getStore();
   const audit = await store.getAudit(auditId);

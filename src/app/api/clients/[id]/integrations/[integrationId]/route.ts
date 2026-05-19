@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { updateIntegrationRecord } from "@/lib/audit-engine";
+import { deleteIntegrationRecord, updateIntegrationRecord } from "@/lib/audit-engine";
 import { assertSafeAuditUrl } from "@/lib/audit-url";
 import { loadClientForViewer, loadIntegrationForViewer, requireRouteViewer } from "@/lib/route-auth";
 
@@ -84,6 +84,40 @@ export async function PATCH(
       settings: settingsPatch,
     });
 
+    if (!integration) {
+      return NextResponse.json({ error: "Integration not found." }, { status: 404 });
+    }
+
+    return NextResponse.json({ integration });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Invalid request." },
+      { status: 400 },
+    );
+  }
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string; integrationId: string }> },
+) {
+  const { viewer, response } = await requireRouteViewer();
+  if (!viewer) return response;
+
+  try {
+    const { id, integrationId } = await context.params;
+    const { response: clientResponse } = await loadClientForViewer(viewer, id);
+    if (clientResponse) return clientResponse;
+
+    const { integration: existing, response: integrationResponse } = await loadIntegrationForViewer(
+      viewer,
+      integrationId,
+    );
+    if (integrationResponse || !existing || existing.clientId !== id) {
+      return NextResponse.json({ error: "Integration not found." }, { status: 404 });
+    }
+
+    const integration = await deleteIntegrationRecord(integrationId);
     if (!integration) {
       return NextResponse.json({ error: "Integration not found." }, { status: 404 });
     }

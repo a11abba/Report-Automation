@@ -7,6 +7,7 @@ import type {
   AuditEventRecord,
   AuditRecord,
   AuditReportPayload,
+  ClientReportMemoryLinkRecord,
   ClientRecord,
   ContextEntryRecord,
   IntegrationRecord,
@@ -15,6 +16,8 @@ import type {
   JobStatus,
   LocationRecord,
   OAuthSessionRecord,
+  ReportFeedbackRecord,
+  ReportMemoryRecord,
   ReportPeriodRecord,
   UserRecord,
 } from "@/lib/audit/types";
@@ -60,6 +63,13 @@ function hydrateReport(report: AuditReportPayload): AuditReportPayload {
     hypotheses: report.hypotheses ?? [],
     recommendations: report.recommendations ?? [],
     confidenceNotes: report.confidenceNotes ?? [],
+    framework: report.framework ?? {
+      executiveSummary: "",
+      whatHappened: report.dataFacts ?? [],
+      whyItHappened: report.hypotheses ?? [],
+      whatWeAreDoing: report.recommendations ?? [],
+      ccipaPillars: [],
+    },
     findings: (report.findings ?? []).map((finding) => ({
       ...finding,
       severityLabel: finding.severityLabel ?? String(finding.severity ?? ""),
@@ -144,6 +154,9 @@ export class PostgresStore implements AppStore {
         primary_domain text null,
         report_language text not null default 'pt-BR',
         report_focus text not null default 'full_funnel',
+        report_intro text null,
+        report_benchmarks text null,
+        reference_report_notes text null,
         monthly_report_enabled boolean not null default false,
         monthly_report_day integer null,
         monthly_report_auto_generate boolean not null default true,
@@ -204,6 +217,35 @@ export class PostgresStore implements AppStore {
         created_at timestamptz not null,
         updated_at timestamptz not null,
         unique (client_id, period_key)
+      );
+      create table if not exists report_memories (
+        id text primary key,
+        account_id text not null references accounts(id) on delete cascade,
+        title text not null,
+        source_client_name text null,
+        period_label text null,
+        notes text null,
+        content text not null,
+        created_at timestamptz not null,
+        updated_at timestamptz not null
+      );
+      create table if not exists client_report_memory_links (
+        id text primary key,
+        account_id text not null references accounts(id) on delete cascade,
+        client_id text not null references clients(id) on delete cascade,
+        report_memory_id text not null references report_memories(id) on delete cascade,
+        created_at timestamptz not null,
+        unique (client_id, report_memory_id)
+      );
+      create table if not exists report_feedback (
+        id text primary key,
+        account_id text not null references accounts(id) on delete cascade,
+        client_id text not null references clients(id) on delete cascade,
+        audit_id text not null references audits(id) on delete cascade,
+        rating text not null,
+        notes text not null,
+        created_at timestamptz not null,
+        updated_at timestamptz not null
       );
       create table if not exists context_entries (
         id text primary key,
@@ -266,6 +308,9 @@ export class PostgresStore implements AppStore {
       alter table clients add column if not exists monthly_report_enabled boolean not null default false;
       alter table clients add column if not exists monthly_report_day integer null;
       alter table clients add column if not exists monthly_report_auto_generate boolean not null default true;
+      alter table clients add column if not exists report_intro text null;
+      alter table clients add column if not exists report_benchmarks text null;
+      alter table clients add column if not exists reference_report_notes text null;
     `);
 
     await this.ensurePlatformAccount();
@@ -335,6 +380,9 @@ export class PostgresStore implements AppStore {
       primaryDomain: (row.primary_domain as string | null) ?? null,
       reportLanguage: row.report_language as ClientRecord["reportLanguage"],
       reportFocus: row.report_focus as ClientRecord["reportFocus"],
+      reportIntro: (row.report_intro as string | null) ?? null,
+      reportBenchmarks: (row.report_benchmarks as string | null) ?? null,
+      referenceReportNotes: (row.reference_report_notes as string | null) ?? null,
       monthlyReportEnabled: Boolean(row.monthly_report_enabled),
       monthlyReportDay:
         row.monthly_report_day == null ? null : Number(row.monthly_report_day),
@@ -400,6 +448,45 @@ export class PostgresStore implements AppStore {
         },
       ),
       generatedAt: (row.generated_at as string | null) ?? null,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapReportMemory(row: Record<string, unknown>): ReportMemoryRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      title: String(row.title),
+      sourceClientName: (row.source_client_name as string | null) ?? null,
+      periodLabel: (row.period_label as string | null) ?? null,
+      notes: (row.notes as string | null) ?? null,
+      content: String(row.content),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapClientReportMemoryLink(
+    row: Record<string, unknown>,
+  ): ClientReportMemoryLinkRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      clientId: String(row.client_id),
+      reportMemoryId: String(row.report_memory_id),
+      createdAt: String(row.created_at),
+    };
+  }
+
+  private mapReportFeedback(row: Record<string, unknown>): ReportFeedbackRecord {
+    return {
+      id: String(row.id),
+      accountId: String(row.account_id),
+      clientId: String(row.client_id),
+      auditId: String(row.audit_id),
+      rating: row.rating as ReportFeedbackRecord["rating"],
+      notes: String(row.notes),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -555,13 +642,16 @@ export class PostgresStore implements AppStore {
               primary_domain,
               report_language,
               report_focus,
+              report_intro,
+              report_benchmarks,
+              reference_report_notes,
               monthly_report_enabled,
               monthly_report_day,
               monthly_report_auto_generate,
               created_at,
               updated_at
             )
-             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
              on conflict (id) do nothing`,
             [
               String(row.id),
@@ -573,6 +663,9 @@ export class PostgresStore implements AppStore {
               (row.primary_domain as string | null) ?? null,
               (row.report_language as string | null) ?? "pt-BR",
               (row.report_focus as string | null) ?? "full_funnel",
+              (row.report_intro as string | null) ?? null,
+              (row.report_benchmarks as string | null) ?? null,
+              (row.reference_report_notes as string | null) ?? null,
               Boolean(row.monthly_report_enabled),
               row.monthly_report_day == null ? null : Number(row.monthly_report_day),
               row.monthly_report_auto_generate == null
@@ -838,7 +931,22 @@ export class PostgresStore implements AppStore {
     return result.rows[0] ? this.mapClient(result.rows[0]) : null;
   }
 
-  async createClient(accountId: string, input: Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus">) {
+  async createClient(
+    accountId: string,
+    input: Pick<
+      ClientRecord,
+      | "name"
+      | "industry"
+      | "industryLabelPt"
+      | "operatingModel"
+      | "primaryDomain"
+      | "reportLanguage"
+      | "reportFocus"
+      | "reportIntro"
+      | "reportBenchmarks"
+      | "referenceReportNotes"
+    >,
+  ) {
     const now = new Date().toISOString();
     const clientRecord: ClientRecord = {
       id: createId("client"),
@@ -861,27 +969,225 @@ export class PostgresStore implements AppStore {
         primary_domain,
         report_language,
         report_focus,
+        report_intro,
+        report_benchmarks,
+        reference_report_notes,
         monthly_report_enabled,
         monthly_report_day,
         monthly_report_auto_generate,
         created_at,
         updated_at
       )
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-      [clientRecord.id, clientRecord.accountId, clientRecord.name, clientRecord.industry, clientRecord.industryLabelPt, clientRecord.operatingModel, clientRecord.primaryDomain, clientRecord.reportLanguage, clientRecord.reportFocus, clientRecord.monthlyReportEnabled, clientRecord.monthlyReportDay, clientRecord.monthlyReportAutoGenerate, clientRecord.createdAt, clientRecord.updatedAt],
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+      [clientRecord.id, clientRecord.accountId, clientRecord.name, clientRecord.industry, clientRecord.industryLabelPt, clientRecord.operatingModel, clientRecord.primaryDomain, clientRecord.reportLanguage, clientRecord.reportFocus, clientRecord.reportIntro, clientRecord.reportBenchmarks, clientRecord.referenceReportNotes, clientRecord.monthlyReportEnabled, clientRecord.monthlyReportDay, clientRecord.monthlyReportAutoGenerate, clientRecord.createdAt, clientRecord.updatedAt],
     );
     return clientRecord;
   }
 
-  async updateClient(id: string, patch: Partial<Pick<ClientRecord, "name" | "industry" | "industryLabelPt" | "operatingModel" | "primaryDomain" | "reportLanguage" | "reportFocus" | "monthlyReportEnabled" | "monthlyReportDay" | "monthlyReportAutoGenerate">>) {
+  async updateClient(
+    id: string,
+    patch: Partial<
+      Pick<
+        ClientRecord,
+        | "name"
+        | "industry"
+        | "industryLabelPt"
+        | "operatingModel"
+        | "primaryDomain"
+        | "reportLanguage"
+        | "reportFocus"
+        | "reportIntro"
+        | "reportBenchmarks"
+        | "referenceReportNotes"
+        | "monthlyReportEnabled"
+        | "monthlyReportDay"
+        | "monthlyReportAutoGenerate"
+      >
+    >,
+  ) {
     const current = await this.getClient(id);
     if (!current) return null;
     const next: ClientRecord = { ...current, ...patch, updatedAt: new Date().toISOString() };
     await this.pool.query(
-      `update clients set name = $1, industry = $2, industry_label_pt = $3, operating_model = $4, primary_domain = $5, report_language = $6, report_focus = $7, monthly_report_enabled = $8, monthly_report_day = $9, monthly_report_auto_generate = $10, updated_at = $11 where id = $12`,
-      [next.name, next.industry, next.industryLabelPt, next.operatingModel, next.primaryDomain, next.reportLanguage, next.reportFocus, next.monthlyReportEnabled, next.monthlyReportDay, next.monthlyReportAutoGenerate, next.updatedAt, id],
+      `update clients set name = $1, industry = $2, industry_label_pt = $3, operating_model = $4, primary_domain = $5, report_language = $6, report_focus = $7, report_intro = $8, report_benchmarks = $9, reference_report_notes = $10, monthly_report_enabled = $11, monthly_report_day = $12, monthly_report_auto_generate = $13, updated_at = $14 where id = $15`,
+      [next.name, next.industry, next.industryLabelPt, next.operatingModel, next.primaryDomain, next.reportLanguage, next.reportFocus, next.reportIntro, next.reportBenchmarks, next.referenceReportNotes, next.monthlyReportEnabled, next.monthlyReportDay, next.monthlyReportAutoGenerate, next.updatedAt, id],
     );
     return next;
+  }
+
+  async listReportMemories(accountId?: string) {
+    const result = accountId
+      ? await this.pool.query(
+          "select * from report_memories where account_id = $1 order by created_at desc",
+          [accountId],
+        )
+      : await this.pool.query("select * from report_memories order by created_at desc");
+    return result.rows.map((row) => this.mapReportMemory(row));
+  }
+
+  async getReportMemory(id: string) {
+    const result = await this.pool.query(
+      "select * from report_memories where id = $1 limit 1",
+      [id],
+    );
+    return result.rows[0] ? this.mapReportMemory(result.rows[0]) : null;
+  }
+
+  async createReportMemory(
+    accountId: string,
+    input: Pick<
+      ReportMemoryRecord,
+      "title" | "sourceClientName" | "periodLabel" | "notes" | "content"
+    >,
+  ) {
+    const now = new Date().toISOString();
+    const memory: ReportMemoryRecord = {
+      id: createId("memory"),
+      accountId,
+      title: input.title,
+      sourceClientName: input.sourceClientName,
+      periodLabel: input.periodLabel,
+      notes: input.notes,
+      content: input.content,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.pool.query(
+      `insert into report_memories (id, account_id, title, source_client_name, period_label, notes, content, created_at, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        memory.id,
+        memory.accountId,
+        memory.title,
+        memory.sourceClientName,
+        memory.periodLabel,
+        memory.notes,
+        memory.content,
+        memory.createdAt,
+        memory.updatedAt,
+      ],
+    );
+    return memory;
+  }
+
+  async deleteReportMemory(id: string) {
+    const current = await this.getReportMemory(id);
+    if (!current) return null;
+    await this.pool.query("delete from client_report_memory_links where report_memory_id = $1", [
+      id,
+    ]);
+    await this.pool.query("delete from report_memories where id = $1", [id]);
+    return current;
+  }
+
+  async listClientReportMemoryLinks(clientId: string) {
+    const result = await this.pool.query(
+      "select * from client_report_memory_links where client_id = $1 order by created_at desc",
+      [clientId],
+    );
+    return result.rows.map((row) => this.mapClientReportMemoryLink(row));
+  }
+
+  async listReportMemoriesByClient(clientId: string) {
+    const result = await this.pool.query(
+      `select rm.*
+       from report_memories rm
+       inner join client_report_memory_links links on links.report_memory_id = rm.id
+       where links.client_id = $1
+       order by links.created_at desc`,
+      [clientId],
+    );
+    return result.rows.map((row) => this.mapReportMemory(row));
+  }
+
+  async attachReportMemoryToClient(clientId: string, reportMemoryId: string) {
+    const client = await this.getClient(clientId);
+    const memory = await this.getReportMemory(reportMemoryId);
+    if (!client || !memory) {
+      throw new Error("Client or report memory not found.");
+    }
+    if (client.accountId !== memory.accountId) {
+      throw new Error("Report memory and client must belong to the same account.");
+    }
+    const existing = await this.pool.query(
+      "select * from client_report_memory_links where client_id = $1 and report_memory_id = $2 limit 1",
+      [clientId, reportMemoryId],
+    );
+    if (existing.rows[0]) {
+      return this.mapClientReportMemoryLink(existing.rows[0]);
+    }
+    const link: ClientReportMemoryLinkRecord = {
+      id: createId("memory_link"),
+      accountId: client.accountId,
+      clientId,
+      reportMemoryId,
+      createdAt: new Date().toISOString(),
+    };
+    await this.pool.query(
+      `insert into client_report_memory_links (id, account_id, client_id, report_memory_id, created_at)
+       values ($1,$2,$3,$4,$5)`,
+      [link.id, link.accountId, link.clientId, link.reportMemoryId, link.createdAt],
+    );
+    return link;
+  }
+
+  async detachReportMemoryFromClient(clientId: string, reportMemoryId: string) {
+    await this.pool.query(
+      "delete from client_report_memory_links where client_id = $1 and report_memory_id = $2",
+      [clientId, reportMemoryId],
+    );
+  }
+
+  async listReportFeedbackByClient(clientId: string) {
+    const result = await this.pool.query(
+      "select * from report_feedback where client_id = $1 order by created_at desc",
+      [clientId],
+    );
+    return result.rows.map((row) => this.mapReportFeedback(row));
+  }
+
+  async listReportFeedbackByAudit(auditId: string) {
+    const result = await this.pool.query(
+      "select * from report_feedback where audit_id = $1 order by created_at desc",
+      [auditId],
+    );
+    return result.rows.map((row) => this.mapReportFeedback(row));
+  }
+
+  async createReportFeedback(
+    auditId: string,
+    input: Pick<ReportFeedbackRecord, "rating" | "notes">,
+  ) {
+    const audit = await this.getAudit(auditId);
+    if (!audit) {
+      throw new Error("Audit not found.");
+    }
+    const now = new Date().toISOString();
+    const feedback: ReportFeedbackRecord = {
+      id: createId("feedback"),
+      accountId: audit.accountId,
+      clientId: audit.clientId,
+      auditId,
+      rating: input.rating,
+      notes: input.notes,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.pool.query(
+      `insert into report_feedback (id, account_id, client_id, audit_id, rating, notes, created_at, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        feedback.id,
+        feedback.accountId,
+        feedback.clientId,
+        feedback.auditId,
+        feedback.rating,
+        feedback.notes,
+        feedback.createdAt,
+        feedback.updatedAt,
+      ],
+    );
+    return feedback;
   }
 
   async deleteClient(id: string) {
@@ -937,6 +1243,13 @@ export class PostgresStore implements AppStore {
       [next.displayName, JSON.stringify(next.credentials), JSON.stringify(next.settings), next.updatedAt, id],
     );
     return next;
+  }
+
+  async deleteIntegration(id: string) {
+    const current = await this.getIntegration(id);
+    if (!current) return null;
+    await this.pool.query("delete from integrations where id = $1", [id]);
+    return current;
   }
 
   async listLocationsByClient(clientId: string) {

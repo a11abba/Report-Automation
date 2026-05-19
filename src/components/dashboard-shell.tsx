@@ -28,6 +28,7 @@ import type {
   IntegrationPropertySummary,
   LocationRecord,
   PlatformDefinition,
+  ReportFeedbackRating,
   RulePackMetadata,
 } from "@/lib/audit/types";
 
@@ -41,6 +42,28 @@ function getRoleLabel(role: AppRole): string {
       return "Client operator";
     case "account_user":
       return "Client admin";
+  }
+}
+
+function getFeedbackLabel(rating: ReportFeedbackRating) {
+  switch (rating) {
+    case "approve":
+      return "Approved";
+    case "revise":
+      return "Needs revision";
+    case "reject":
+      return "Rejected";
+  }
+}
+
+function getFeedbackToneClasses(rating: ReportFeedbackRating) {
+  switch (rating) {
+    case "approve":
+      return "border-emerald-500/20 bg-emerald-500/10 text-emerald-200";
+    case "revise":
+      return "border-amber-500/20 bg-amber-500/10 text-amber-200";
+    case "reject":
+      return "border-rose-500/20 bg-rose-500/10 text-rose-200";
   }
 }
 
@@ -88,8 +111,20 @@ interface DashboardData {
     available: boolean;
     message: string;
   };
+  reportMemories: Array<{
+    id: string;
+    accountId: string;
+    title: string;
+    sourceClientName: string | null;
+    periodLabel: string | null;
+    notes: string | null;
+    content: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
   clients: Array<{
     id: string;
+    accountId: string;
     name: string;
     industry: string;
     industryLabelPt: string | null;
@@ -97,6 +132,9 @@ interface DashboardData {
     primaryDomain: string | null;
     reportLanguage: "pt-BR" | "pt-PT" | "en";
     reportFocus: "full_funnel" | "lifecycle_marketing" | "seo_local" | "paid_media";
+    reportIntro: string | null;
+    reportBenchmarks: string | null;
+    referenceReportNotes: string | null;
     monthlyReportEnabled: boolean;
     monthlyReportDay: number | null;
     monthlyReportAutoGenerate: boolean;
@@ -129,6 +167,27 @@ interface DashboardData {
     }>;
     locations: LocationRecord[];
     audits: AuditRecord[];
+    reportMemories: Array<{
+      id: string;
+      accountId: string;
+      title: string;
+      sourceClientName: string | null;
+      periodLabel: string | null;
+      notes: string | null;
+      content: string;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+    reportFeedback: Array<{
+      id: string;
+      accountId: string;
+      clientId: string;
+      auditId: string;
+      rating: ReportFeedbackRating;
+      notes: string;
+      createdAt: string;
+      updatedAt: string;
+    }>;
     reportPeriods: ReportPeriodView[];
   }>;
   recentAudits: AuditRecord[];
@@ -146,6 +205,11 @@ interface AutoConfigurationPlan {
   attemptKey: string;
   patch: Record<string, unknown>;
   successMessage: string;
+}
+
+interface BannerMessage {
+  tone: "success" | "error";
+  text: string;
 }
 
 const ignoredMatchTokens = new Set([
@@ -427,9 +491,13 @@ export function DashboardShell({
 }) {
   const queryClient = useQueryClient();
   const [pending, startTransition] = useTransition();
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<BannerMessage | null>(null);
   const [deleteIntentClientId, setDeleteIntentClientId] = useState<string | null>(null);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState("");
+  const [expandedClientIds, setExpandedClientIds] = useState<string[]>(() =>
+    initialData.clients[0] ? [initialData.clients[0].id] : [],
+  );
+  const [expandedIntegrationIds, setExpandedIntegrationIds] = useState<Record<string, boolean>>({});
   const attemptedAutoConfigurations = useRef(new Set<string>());
   const { data } = useQuery({
     queryKey: ["dashboard"],
@@ -437,37 +505,69 @@ export function DashboardShell({
     initialData,
   });
 
-  const runTask = (task: () => Promise<unknown>, successMessage: string) => {
+  const runTask = <T,>(
+    task: () => Promise<T>,
+    successMessage: string,
+    onSuccess?: (result: T) => void,
+  ) => {
     startTransition(async () => {
       try {
         setMessage(null);
-        await task();
-        setMessage(successMessage);
+        const result = await task();
+        setMessage({ tone: "success", text: successMessage });
+        onSuccess?.(result);
         await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       } catch (error) {
-        setMessage(error instanceof Error ? error.message : "Something went wrong.");
+        setMessage({
+          tone: "error",
+          text: error instanceof Error ? error.message : "Something went wrong.",
+        });
       }
     });
   };
+
+  useEffect(() => {
+    if (!message) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setMessage(null), 7000);
+    return () => window.clearTimeout(timeoutId);
+  }, [message]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type !== "audit-platform:oauth-complete") return;
       const payload = event.data.payload as { ok?: boolean; error?: string; status?: string };
-      setMessage(
-        payload.ok
+      setMessage({
+        tone: payload.ok ? "success" : "error",
+        text: payload.ok
           ? payload.status === "connected"
             ? "OAuth connection completed."
             : "OAuth callback received."
           : payload.error ?? "OAuth callback failed.",
-      );
+      });
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     };
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
   }, [queryClient]);
+
+  const toggleClientExpanded = (clientId: string) => {
+    setExpandedClientIds((current) =>
+      current.includes(clientId)
+        ? current.filter((id) => id !== clientId)
+        : [...current, clientId],
+    );
+  };
+
+  const toggleIntegrationExpanded = (integrationId: string, nextDefault: boolean) => {
+    setExpandedIntegrationIds((current) => ({
+      ...current,
+      [integrationId]: !(current[integrationId] ?? nextDefault),
+    }));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -484,11 +584,15 @@ export function DashboardShell({
           try {
             await patchJson(`/api/clients/${client.id}/integrations/${integration.id}`, plan.patch);
             if (cancelled) return;
-            setMessage(plan.successMessage);
+            setMessage({ tone: "success", text: plan.successMessage });
             await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
           } catch (error) {
             if (cancelled) return;
-            setMessage(error instanceof Error ? error.message : "Automatic configuration failed.");
+            setMessage({
+              tone: "error",
+              text:
+                error instanceof Error ? error.message : "Automatic configuration failed.",
+            });
           }
 
           return;
@@ -578,6 +682,13 @@ export function DashboardShell({
   const isPlatformAdmin = viewer.role === "platform_admin";
   const canViewBilling = viewer.role === "platform_admin" || viewer.role === "account_admin";
   const accountOptions = isPlatformAdmin ? data.accounts : data.currentAccount ? [data.currentAccount] : [];
+  const currentAccountId =
+    data.currentAccount?.id ?? (viewer.role === "platform_admin" ? accountOptions[0]?.id ?? null : viewer.accountId);
+  const scopedReportMemories = isPlatformAdmin
+    ? data.reportMemories
+    : currentAccountId
+      ? data.reportMemories.filter((memory) => memory.accountId === currentAccountId)
+      : data.reportMemories;
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(243,193,91,0.12),transparent_24%),radial-gradient(circle_at_85%_12%,rgba(53,130,246,0.16),transparent_18%),linear-gradient(180deg,#091019_0%,#0b111a_48%,#0a0f16_100%)] text-slate-100">
@@ -614,6 +725,12 @@ export function DashboardShell({
               className="rounded-[1.25rem] border border-white/8 bg-white/[0.03] px-4 py-4 text-sm font-medium text-slate-300 transition hover:border-white/16 hover:bg-white/[0.05]"
             >
               New client
+            </a>
+            <a
+              href="#report-library"
+              className="rounded-[1.25rem] border border-white/8 bg-white/[0.03] px-4 py-4 text-sm font-medium text-slate-300 transition hover:border-white/16 hover:bg-white/[0.05]"
+            >
+              Report library
             </a>
           </nav>
 
@@ -768,8 +885,15 @@ export function DashboardShell({
                 </div>
               </div>
               {message ? (
-                <div className="rounded-[1.25rem] border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
-                  {message}
+                <div
+                  className={clsx(
+                    "rounded-[1.25rem] px-4 py-3 text-sm",
+                    message.tone === "success"
+                      ? "border border-emerald-500/20 bg-emerald-500/10 text-emerald-100"
+                      : "border border-rose-500/20 bg-rose-500/10 text-rose-100",
+                  )}
+                >
+                  {message.text}
                 </div>
               ) : null}
               {!data.pdfRenderer.available ? (
@@ -845,6 +969,10 @@ export function DashboardShell({
                       const operatingModel = String(formData.get("operatingModel") ?? "single_source");
                       const reportLanguage = String(formData.get("reportLanguage") ?? "pt-BR");
                       const reportFocus = String(formData.get("reportFocus") ?? "full_funnel");
+                      const reportIntro = String(formData.get("reportIntro") ?? "");
+                      const reportBenchmarks = String(formData.get("reportBenchmarks") ?? "");
+                      const referenceReportNotes = String(formData.get("referenceReportNotes") ?? "");
+                      const initialReportMemoryId = String(formData.get("initialReportMemoryId") ?? "");
                       runTask(
                         () =>
                           postJson("/api/clients", {
@@ -856,6 +984,10 @@ export function DashboardShell({
                             primaryDomain: primaryDomain || null,
                             reportLanguage,
                             reportFocus,
+                            reportIntro: reportIntro || null,
+                            reportBenchmarks: reportBenchmarks || null,
+                            referenceReportNotes: referenceReportNotes || null,
+                            initialReportMemoryId: initialReportMemoryId || null,
                           }),
                         `Client "${name}" created.`,
                       );
@@ -908,6 +1040,35 @@ export function DashboardShell({
                       <option value="seo_local">SEO / Local report</option>
                       <option value="paid_media">Paid media report</option>
                     </select>
+                    <textarea
+                      name="reportIntro"
+                      placeholder="Internal client intro for AI: what the business does, main offer, priorities, conversion goal, and current focus."
+                      className="min-h-24 rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+                    />
+                    <textarea
+                      name="reportBenchmarks"
+                      placeholder="Internal benchmarks: seasonality, expected CPL/ROAS, lead quality notes, sales cycle, service-level issues, or success thresholds."
+                      className="min-h-24 rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+                    />
+                    <textarea
+                      name="referenceReportNotes"
+                      placeholder="Reference report notes: preferred narrative style, how the client likes insights framed, and what should always be emphasized or avoided."
+                      className="min-h-24 rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+                    />
+                    <select
+                      name="initialReportMemoryId"
+                      className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                      defaultValue=""
+                    >
+                      <option value="">No reference report selected</option>
+                      {scopedReportMemories.map((memory) => (
+                        <option key={memory.id} value={memory.id}>
+                          {memory.title}
+                          {memory.sourceClientName ? ` · ${memory.sourceClientName}` : ""}
+                          {memory.periodLabel ? ` · ${memory.periodLabel}` : ""}
+                        </option>
+                      ))}
+                    </select>
                     <button
                       type="submit"
                       className="rounded-full bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-5 py-3 text-sm font-semibold text-[#11161f] shadow-[0_18px_40px_rgba(243,193,91,0.25)] disabled:opacity-50"
@@ -933,6 +1094,145 @@ export function DashboardShell({
                     </p>
                   </div>
                 )}
+              </div>
+            </section>
+
+            <section
+              id="report-library"
+              className="mt-6 rounded-[2rem] border border-white/10 bg-[#121a26] p-6 shadow-[0_24px_70px_rgba(0,0,0,0.24)]"
+            >
+              <div className="grid gap-6 xl:grid-cols-[0.88fr_1.12fr]">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
+                    Report memory library
+                  </p>
+                  <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">
+                    Feed the assistant with strong legacy examples
+                  </h2>
+                  <p className="mt-3 text-sm leading-6 text-slate-400">
+                    Paste old reports that represent the quality, tone, and framing you want.
+                    They do not train the model globally. They work as account-scoped reference
+                    material that can be attached to new clients when you create them.
+                  </p>
+                    <form
+                      className="mt-5 grid gap-3"
+                      onSubmit={(event) => {
+                      event.preventDefault();
+                      const formData = new FormData(event.currentTarget);
+                      const accountId = String(formData.get("accountId") ?? currentAccountId ?? "");
+                      const title = String(formData.get("title") ?? "").trim();
+                      const sourceClientName = String(formData.get("sourceClientName") ?? "").trim();
+                      const periodLabel = String(formData.get("periodLabel") ?? "").trim();
+                      const notes = String(formData.get("notes") ?? "").trim();
+                      const content = String(formData.get("content") ?? "").trim();
+                      runTask(
+                        () =>
+                          postJson("/api/report-memories", {
+                            accountId,
+                            title,
+                            sourceClientName: sourceClientName || null,
+                            periodLabel: periodLabel || null,
+                            notes: notes || null,
+                            content,
+                          }),
+                        `Reference report "${title}" saved to the library.`,
+                      );
+                      event.currentTarget.reset();
+                    }}
+                  >
+                    {isPlatformAdmin ? (
+                      <select
+                        name="accountId"
+                        className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                        defaultValue={currentAccountId ?? accountOptions[0]?.id ?? ""}
+                      >
+                        {accountOptions.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <Input name="title" placeholder="Reference title" required />
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <Input
+                        name="sourceClientName"
+                        placeholder="Source client name (optional)"
+                      />
+                      <Input name="periodLabel" placeholder="Period label (optional)" />
+                    </div>
+                    <textarea
+                      name="notes"
+                      placeholder="Why this example matters: tone, structure, business framing, or style cues."
+                      className="min-h-20 rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+                    />
+                    <textarea
+                      name="content"
+                      placeholder="Paste the old report text here."
+                      className="min-h-40 rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+                      required
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm text-slate-200 transition hover:bg-white/[0.08] disabled:opacity-50"
+                      disabled={pending}
+                    >
+                      {pending ? "Saving..." : "Save to library"}
+                    </button>
+                  </form>
+                </div>
+
+                <div className="grid gap-3">
+                  {scopedReportMemories.length === 0 ? (
+                    <EmptyState
+                      text="No reference reports saved yet. Paste one strong legacy report and it will become reusable context for future clients."
+                      compact
+                    />
+                  ) : (
+                    scopedReportMemories.map((memory) => (
+                      <article
+                        key={memory.id}
+                        className="rounded-[1.5rem] border border-white/10 bg-[#182230] p-5"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="truncate text-lg font-semibold text-white">
+                              {memory.title}
+                            </h3>
+                            <p className="mt-1 text-sm text-slate-400">
+                              {[memory.sourceClientName, memory.periodLabel]
+                                .filter(Boolean)
+                                .join(" · ") || "General reference"}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            className="rounded-full border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-rose-200 transition hover:bg-rose-500/15"
+                            onClick={() => {
+                              if (!window.confirm(`Remove reference "${memory.title}"?`)) {
+                                return;
+                              }
+                              runTask(
+                                () => deleteJson(`/api/report-memories/${memory.id}`),
+                                `Reference report "${memory.title}" removed.`,
+                              );
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        {memory.notes ? (
+                          <p className="mt-3 text-sm leading-6 text-slate-300">{memory.notes}</p>
+                        ) : null}
+                        <p className="mt-3 text-sm leading-6 text-slate-400">
+                          {memory.content.length > 300
+                            ? `${memory.content.slice(0, 300).trimEnd()}...`
+                            : memory.content}
+                        </p>
+                      </article>
+                    ))
+                  )}
+                </div>
               </div>
             </section>
 
@@ -1094,6 +1394,7 @@ export function DashboardShell({
                 const connectedIntegrations = client.integrations.filter(
                   (integration) => integration.connectionStatus === "ready",
                 );
+                const isClientExpanded = expandedClientIds.includes(client.id);
 
                 return (
                   <article
@@ -1101,13 +1402,28 @@ export function DashboardShell({
                     className="rounded-[1.75rem] border border-white/10 bg-[#182230] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
                   >
                     <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div>
-                        <h3
-                          id={`client-${client.id}`}
-                          className="scroll-mt-32 text-xl font-semibold text-white"
-                        >
-                          {client.name}
-                        </h3>
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 text-left"
+                        onClick={() => toggleClientExpanded(client.id)}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3
+                            id={`client-${client.id}`}
+                            className="scroll-mt-32 text-xl font-semibold text-white"
+                          >
+                            {client.name}
+                          </h3>
+                          <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-300">
+                            {isClientExpanded ? "Open" : "Closed"}
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-[#0f1723] px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                            {client.integrations.length} connectors
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-[#0f1723] px-3 py-1 text-[11px] uppercase tracking-[0.2em] text-slate-400">
+                            {client.reportPeriods.length} reports
+                          </span>
+                        </div>
                         <p className="mt-1 text-sm text-slate-400">
                           {client.industry} {"\u00b7"} {client.operatingModel.replace("_", " ")}
                         </p>
@@ -1115,22 +1431,17 @@ export function DashboardShell({
                           {client.primaryDomain ?? "No primary domain"}
                         </p>
                         <p className="mt-1 text-sm text-slate-400">
-                          Report language: {client.reportLanguage}
-                          {client.industryLabelPt ? ` \u00b7 PT label: ${client.industryLabelPt}` : ""}
+                          {connectedIntegrations.length} live-ready {"\u00b7"} Report language: {client.reportLanguage} {"\u00b7"} Focus: {getReportFocusLabel("en", client.reportFocus)}
                         </p>
-                        <p className="mt-1 text-sm text-slate-400">
-                          Report focus: {getReportFocusLabel("en", client.reportFocus)}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-400">
-                          Monthly automation:{" "}
-                          {client.monthlyReportEnabled
-                            ? client.monthlyReportDay == null
-                              ? "enabled, waiting for a day of month"
-                              : `day ${client.monthlyReportDay} · ${client.monthlyReportAutoGenerate ? "auto-generate" : "draft only"}`
-                            : "disabled"}
-                        </p>
-                      </div>
+                      </button>
                       <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200 transition hover:bg-white/[0.08]"
+                          onClick={() => toggleClientExpanded(client.id)}
+                        >
+                          {isClientExpanded ? "Collapse client" : "Open client"}
+                        </button>
                         {isPlatformAdmin ? (
                           <button
                             className="rounded-full border border-rose-500/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200 transition hover:bg-rose-500/15"
@@ -1165,12 +1476,20 @@ export function DashboardShell({
                             )
                           }
                         >
-                          Run brand audit
+                          Run diagnostic audit
                         </button>
                       </div>
                     </div>
 
-                    {deleteIntentClientId === client.id ? (
+                    {isClientExpanded ? (
+                      <p className="mt-3 text-xs leading-6 text-slate-500">
+                        Diagnostic audit runs the live connector data right now. Monthly reports
+                        below use report month, comparison month, business inputs, and optional
+                        context.
+                      </p>
+                    ) : null}
+
+                    {isClientExpanded && deleteIntentClientId === client.id ? (
                       <div className="mt-4 rounded-[1.25rem] border border-rose-500/20 bg-rose-500/10 p-4">
                         <p className="text-sm font-medium text-rose-100">
                           Confirm client removal
@@ -1213,8 +1532,10 @@ export function DashboardShell({
                       </div>
                     ) : null}
 
+                    {isClientExpanded ? (
+                    <>
                     <form
-                      className="mt-4 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]"
+                      className="mt-4 grid gap-3"
                       onSubmit={(event) => {
                         event.preventDefault();
                         const formData = new FormData(event.currentTarget);
@@ -1226,42 +1547,182 @@ export function DashboardShell({
                               ),
                               reportFocus: String(formData.get("reportFocus") ?? client.reportFocus),
                               industryLabelPt: String(formData.get("industryLabelPt") ?? "") || null,
+                              reportIntro: String(formData.get("reportIntro") ?? "").trim() || null,
+                              reportBenchmarks:
+                                String(formData.get("reportBenchmarks") ?? "").trim() || null,
+                              referenceReportNotes:
+                                String(formData.get("referenceReportNotes") ?? "").trim() || null,
                             }),
                           `Client preferences updated for ${client.name}.`,
                         );
                       }}
                     >
-                      <select
-                        name="reportLanguage"
-                        className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
-                        defaultValue={client.reportLanguage}
-                      >
-                        <option value="pt-BR">Report in pt-BR</option>
-                        <option value="pt-PT">Report in pt-PT</option>
-                        <option value="en">Report in English</option>
-                      </select>
-                      <select
-                        name="reportFocus"
-                        className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
-                        defaultValue={client.reportFocus}
-                      >
-                        <option value="full_funnel">Full funnel report</option>
-                        <option value="lifecycle_marketing">Lifecycle / Email report</option>
-                        <option value="seo_local">SEO / Local report</option>
-                        <option value="paid_media">Paid media report</option>
-                      </select>
-                      <Input
-                        name="industryLabelPt"
-                        placeholder="Portuguese report label (used only for PT reports)"
-                        defaultValue={client.industryLabelPt ?? ""}
+                      <div className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr_auto]">
+                        <select
+                          name="reportLanguage"
+                          className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                          defaultValue={client.reportLanguage}
+                        >
+                          <option value="pt-BR">Report in pt-BR</option>
+                          <option value="pt-PT">Report in pt-PT</option>
+                          <option value="en">Report in English</option>
+                        </select>
+                        <select
+                          name="reportFocus"
+                          className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                          defaultValue={client.reportFocus}
+                        >
+                          <option value="full_funnel">Full funnel report</option>
+                          <option value="lifecycle_marketing">Lifecycle / Email report</option>
+                          <option value="seo_local">SEO / Local report</option>
+                          <option value="paid_media">Paid media report</option>
+                        </select>
+                        <Input
+                          name="industryLabelPt"
+                          placeholder="Portuguese report label (used only for PT reports)"
+                          defaultValue={client.industryLabelPt ?? ""}
+                        />
+                        <button
+                          type="submit"
+                          className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 transition hover:bg-white/[0.08]"
+                        >
+                          Save report settings
+                        </button>
+                      </div>
+                      <textarea
+                        name="reportIntro"
+                        defaultValue={client.reportIntro ?? ""}
+                        placeholder="Internal client intro for AI: business model, main offer, conversion target, priority channels, and strategic context."
+                        className="min-h-24 rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
                       />
-                      <button
-                        type="submit"
-                        className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 transition hover:bg-white/[0.08]"
-                      >
-                        Save report settings
-                      </button>
+                      <textarea
+                        name="reportBenchmarks"
+                        defaultValue={client.reportBenchmarks ?? ""}
+                        placeholder="Internal benchmarks: seasonality, expected CPL/ROAS, quality thresholds, pipeline realities, and what 'good' looks like for this client."
+                        className="min-h-24 rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+                      />
+                      <textarea
+                        name="referenceReportNotes"
+                        defaultValue={client.referenceReportNotes ?? ""}
+                        placeholder="Reference report notes: preferred narrative tone, points that must always be emphasized, and framing from pre-platform reports."
+                        className="min-h-24 rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none placeholder:text-slate-500"
+                      />
                     </form>
+
+                    <div className="mt-3 rounded-[1.25rem] border border-white/10 bg-[#111925] p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                            Reference reports
+                          </p>
+                          <p className="mt-2 text-sm leading-6 text-slate-400">
+                            Attach legacy examples that should guide this client&apos;s report tone and
+                            structure.
+                          </p>
+                        </div>
+                        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-slate-300">
+                          {client.reportMemories.length} attached
+                        </span>
+                      </div>
+                      <form
+                        className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          const formData = new FormData(event.currentTarget);
+                          const reportMemoryId = String(formData.get("reportMemoryId") ?? "");
+                          if (!reportMemoryId) {
+                            setMessage({
+                              tone: "error",
+                              text: "Choose a reference report before attaching it to the client.",
+                            });
+                            return;
+                          }
+                          runTask(
+                            () =>
+                              postJson(`/api/clients/${client.id}/report-memories`, {
+                                reportMemoryId,
+                              }),
+                            `Reference report attached to ${client.name}.`,
+                          );
+                          event.currentTarget.reset();
+                        }}
+                      >
+                        <select
+                          name="reportMemoryId"
+                          className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                          defaultValue=""
+                        >
+                          <option value="">Choose a saved reference report</option>
+                          {scopedReportMemories
+                            .filter(
+                              (memory) =>
+                                memory.accountId === client.accountId &&
+                                !client.reportMemories.some((attached) => attached.id === memory.id),
+                            )
+                            .map((memory) => (
+                              <option key={memory.id} value={memory.id}>
+                                {memory.title}
+                                {memory.sourceClientName ? ` · ${memory.sourceClientName}` : ""}
+                                {memory.periodLabel ? ` · ${memory.periodLabel}` : ""}
+                              </option>
+                            ))}
+                        </select>
+                        <button
+                          type="submit"
+                          className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 transition hover:bg-white/[0.08]"
+                        >
+                          Attach reference
+                        </button>
+                      </form>
+                      <div className="mt-4 grid gap-3">
+                        {client.reportMemories.length === 0 ? (
+                          <EmptyState
+                            text="No reference reports attached to this client yet."
+                            compact
+                          />
+                        ) : (
+                          client.reportMemories.map((memory) => (
+                            <div
+                              key={memory.id}
+                              className="rounded-[1rem] border border-white/10 bg-[#182230] p-4"
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium text-white">
+                                    {memory.title}
+                                  </p>
+                                  <p className="mt-1 text-sm text-slate-400">
+                                    {[memory.sourceClientName, memory.periodLabel]
+                                      .filter(Boolean)
+                                      .join(" · ") || "General reference"}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.18em] text-slate-200 transition hover:bg-white/[0.08]"
+                                  onClick={() =>
+                                    runTask(
+                                      () =>
+                                        deleteJson(
+                                          `/api/clients/${client.id}/report-memories/${memory.id}`,
+                                        ),
+                                      `Reference report detached from ${client.name}.`,
+                                    )
+                                  }
+                                >
+                                  Detach
+                                </button>
+                              </div>
+                              {memory.notes ? (
+                                <p className="mt-3 text-sm leading-6 text-slate-300">
+                                  {memory.notes}
+                                </p>
+                              ) : null}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
 
                     <div className="mt-3 rounded-[1.25rem] border border-white/10 bg-[#111925] p-4">
                       <p className="text-xs uppercase tracking-[0.24em] text-slate-500">
@@ -1488,6 +1949,9 @@ export function DashboardShell({
                             !integration.settings.businessAccountId &&
                             Boolean(recommendedAccount) &&
                             (integration.metadata?.accountSummaries?.length ?? 0) > 1;
+                          const defaultExpanded = !integration.connectionDetails.liveReady;
+                          const isIntegrationExpanded =
+                            expandedIntegrationIds[integration.id] ?? defaultExpanded;
 
                           return (
                             <article
@@ -1495,7 +1959,13 @@ export function DashboardShell({
                               className="rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4"
                             >
                             <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div>
+                              <button
+                                type="button"
+                                className="min-w-0 flex-1 text-left"
+                                onClick={() =>
+                                  toggleIntegrationExpanded(integration.id, defaultExpanded)
+                                }
+                              >
                                 <p className="font-medium text-white">
                                   {integration.displayName}
                                 </p>
@@ -1505,10 +1975,45 @@ export function DashboardShell({
                                     ? ` \u00b7 ${integration.credentials.authOrigin}`
                                     : ""}
                                 </p>
+                              </button>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs uppercase tracking-[0.2em] text-slate-200 transition hover:bg-white/[0.08]"
+                                  onClick={() =>
+                                    toggleIntegrationExpanded(integration.id, defaultExpanded)
+                                  }
+                                >
+                                  {isIntegrationExpanded ? "Collapse" : "Open"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded-full border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-rose-200 transition hover:bg-rose-500/15"
+                                  onClick={() => {
+                                    if (
+                                      !window.confirm(
+                                        `Remove connector "${integration.displayName}" from ${client.name}?`,
+                                      )
+                                    ) {
+                                      return;
+                                    }
+                                    runTask(
+                                      () =>
+                                        deleteJson(
+                                          `/api/clients/${client.id}/integrations/${integration.id}`,
+                                        ),
+                                      `Connector removed from ${client.name}.`,
+                                    );
+                                  }}
+                                >
+                                  Remove connector
+                                </button>
+                                <StatusBadge status={integration.connectionStatus} />
                               </div>
-                              <StatusBadge status={integration.connectionStatus} />
                             </div>
 
+                            {!isIntegrationExpanded ? null : (
+                            <>
                             <p className="mt-3 text-sm leading-6 text-slate-400">
                               {integration.validationMessage}
                             </p>
@@ -2640,6 +3145,8 @@ export function DashboardShell({
                                 />
                               </>
                           ) : null}
+                          </>
+                          )}
                           </article>
                         )})
                       )}
@@ -2653,7 +3160,6 @@ export function DashboardShell({
 
                     <ReportPeriodPanel
                       clientId={client.id}
-                      clientName={client.name}
                       reportPeriods={client.reportPeriods}
                       readyIntegrationCount={connectedIntegrations.length}
                       runTask={runTask}
@@ -2762,10 +3268,102 @@ export function DashboardShell({
                                 <span className="text-slate-500">PDF unavailable</span>
                               )}
                             </div>
+                            <div className="mt-5 rounded-[1rem] border border-white/10 bg-[#182230] p-4">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                                    Report feedback
+                                  </p>
+                                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                                    Capture whether this report was client-ready, needed revision,
+                                    or missed the mark. This guides future report drafting for the
+                                    same client.
+                                  </p>
+                                </div>
+                                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-slate-300">
+                                  {
+                                    client.reportFeedback.filter(
+                                      (feedback) => feedback.auditId === audit.id,
+                                    ).length
+                                  } logged
+                                </span>
+                              </div>
+                              <form
+                                className="mt-4 grid gap-3"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  const formData = new FormData(event.currentTarget);
+                                  const rating = String(formData.get("rating") ?? "approve");
+                                  const notes = String(formData.get("notes") ?? "").trim();
+                                  runTask(
+                                    () =>
+                                      postJson(`/api/audits/${audit.id}/feedback`, {
+                                        rating,
+                                        notes,
+                                      }),
+                                    `Feedback saved for audit ${audit.id.slice(-6)}.`,
+                                  );
+                                  event.currentTarget.reset();
+                                }}
+                              >
+                                <div className="grid gap-3 lg:grid-cols-[0.8fr_1.2fr_auto]">
+                                  <select
+                                    name="rating"
+                                    className="rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 text-sm text-slate-100 outline-none"
+                                    defaultValue="approve"
+                                  >
+                                    <option value="approve">Approved</option>
+                                    <option value="revise">Needs revision</option>
+                                    <option value="reject">Rejected</option>
+                                  </select>
+                                  <Input
+                                    name="notes"
+                                    placeholder="What should the assistant keep, improve, or avoid next time?"
+                                    required
+                                  />
+                                  <button
+                                    type="submit"
+                                    className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 transition hover:bg-white/[0.08]"
+                                  >
+                                    Save feedback
+                                  </button>
+                                </div>
+                              </form>
+                              <div className="mt-4 grid gap-3">
+                                {client.reportFeedback
+                                  .filter((feedback) => feedback.auditId === audit.id)
+                                  .slice(0, 3)
+                                  .map((feedback) => (
+                                    <div
+                                      key={feedback.id}
+                                      className="rounded-[1rem] border border-white/10 bg-[#111925] p-3"
+                                    >
+                                      <div className="flex flex-wrap items-center justify-between gap-3">
+                                        <span
+                                          className={clsx(
+                                            "rounded-full border px-3 py-2 text-[11px] uppercase tracking-[0.2em]",
+                                            getFeedbackToneClasses(feedback.rating),
+                                          )}
+                                        >
+                                          {getFeedbackLabel(feedback.rating)}
+                                        </span>
+                                        <span className="text-xs text-slate-500">
+                                          {new Date(feedback.createdAt).toLocaleString()}
+                                        </span>
+                                      </div>
+                                      <p className="mt-3 text-sm leading-6 text-slate-300">
+                                        {feedback.notes}
+                                      </p>
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
                           </article>
                         ))
                       )}
                     </div>
+                    </>
+                    ) : null}
                   </article>
                 );
               })

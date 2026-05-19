@@ -2,6 +2,12 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getReportPeriodDetail } from "@/lib/audit-engine";
 import { redirectIfUnauthenticated } from "@/lib/auth-session-server";
+import { deriveHeadlineMetrics, getMeaningfulPaidCampaigns } from "@/lib/report-metrics";
+import {
+  campaignCostPerConversion,
+  costPerConversion,
+  inferObjectiveForReport,
+} from "@/lib/report-objective";
 import { loadReportPeriodForViewer } from "@/lib/route-auth";
 import type {
   AuditReportPayload,
@@ -42,9 +48,42 @@ function formatDateTime(value: string | null | undefined, locale: string) {
   return new Date(value).toLocaleString(locale);
 }
 
-function formatNumber(value: number | null | undefined, locale: string) {
+function formatNumber(value: number | null | undefined, locale: string, digits = 0) {
   if (value == null) return "N/A";
-  return new Intl.NumberFormat(locale).format(value);
+  return new Intl.NumberFormat(locale, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value);
+}
+
+function sanitizeNarrativeText(value: string) {
+  return value
+    .replace(/most likely driver:\s*/gi, "")
+    .replace(/next action:\s*/gi, "")
+    .replace(/principal explicação:\s*/gi, "")
+    .replace(/próximo passo:\s*/gi, "")
+    .replace(/this is a likely driver behind the period's result set\.?/gi, "")
+    .replace(/esse contexto é um provável fator por trás do resultado do período\.?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function sanitizeNarrativeTitle(value: string) {
+  if (/open investigation point/i.test(value) || /ponto em investigacao/i.test(value)) {
+    return "Context note";
+  }
+  if (/operator note/i.test(value) || /nota operacional/i.test(value)) {
+    return "Business context";
+  }
+  return value;
+}
+
+function sanitizeNarrativeItems(items: ReportNarrativeItem[]) {
+  return items.map((item) => ({
+    ...item,
+    title: sanitizeNarrativeTitle(item.title),
+    detail: sanitizeNarrativeText(item.detail),
+  }));
 }
 
 function confidenceTone(level: ReportConfidenceNote["level"]) {
@@ -54,6 +93,85 @@ function confidenceTone(level: ReportConfidenceNote["level"]) {
     default:
       return "border-emerald-500/20 bg-emerald-500/10 text-emerald-100";
   }
+}
+
+function isInternalConfidenceNote(note: ReportConfidenceNote) {
+  return /\b(ai|ia)\b/i.test(`${note.label} ${note.detail}`);
+}
+
+function getClientVisibleConfidenceNotes(report: AuditReportPayload) {
+  return report.confidenceNotes.filter((note) => !isInternalConfidenceNote(note));
+}
+
+function getNarrativeHeadline(
+  framework: NonNullable<ReturnType<typeof buildFrameworkFallback>>,
+  report: AuditReportPayload,
+) {
+  return (
+    sanitizeNarrativeTitle(framework.whatHappened[0]?.title ?? "") ||
+    report.summary.topRisks[0] ||
+    report.summary.strengths[0] ||
+    "Monthly performance narrative"
+  );
+}
+
+function buildFrameworkFallback(report: AuditReportPayload | null) {
+  if (!report) return null;
+
+  return {
+    executiveSummary:
+      report.framework.executiveSummary ||
+      report.dataFacts[0]?.detail ||
+      report.hypotheses[0]?.detail ||
+      report.recommendations[0]?.detail ||
+      "Healthy baseline.",
+    whatHappened: report.framework.whatHappened.length
+      ? report.framework.whatHappened
+      : report.dataFacts.slice(0, 3),
+    whyItHappened: report.framework.whyItHappened.length
+      ? report.framework.whyItHappened
+      : (report.hypotheses.length ? report.hypotheses : report.providedContext).slice(0, 3),
+    whatWeAreDoing: report.framework.whatWeAreDoing.length
+      ? report.framework.whatWeAreDoing
+      : report.recommendations.slice(0, 3),
+    ccipaPillars: report.framework.ccipaPillars.length
+      ? report.framework.ccipaPillars
+      : [
+          {
+            key: "clear",
+            label: "Clear",
+            status: "watch" as const,
+            detail: "Legacy report payload loaded before the CCIPA structure was added.",
+          },
+          {
+            key: "concise",
+            label: "Concise",
+            status: "watch" as const,
+            detail: "Regenerate the report to see the full framework-driven version.",
+          },
+          {
+            key: "insightful",
+            label: "Insightful",
+            status:
+              report.hypotheses.length > 0 || report.providedContext.length > 0
+                ? ("strong" as const)
+                : ("watch" as const),
+            detail: "Insight fallback was reconstructed from stored narrative sections.",
+          },
+          {
+            key: "precise",
+            label: "Precise",
+            status: "watch" as const,
+            detail: "A regenerated payload will include the upgraded precision assessment.",
+          },
+          {
+            key: "actionable",
+            label: "Actionable",
+            status: report.recommendations.length > 0 ? ("strong" as const) : ("watch" as const),
+            detail: "Recommendations were recovered from the existing report payload.",
+          },
+        ],
+  };
 }
 
 function statusTone(status: ReportPeriodRecord["status"]) {
@@ -68,6 +186,12 @@ function statusTone(status: ReportPeriodRecord["status"]) {
     default:
       return "border-white/10 bg-white/[0.04] text-slate-300";
   }
+}
+
+interface ChartDatum {
+  label: string;
+  value: number;
+  secondary?: string;
 }
 
 function NarrativeSection({
@@ -96,19 +220,70 @@ function NarrativeSection({
               key={`${item.title}-${item.detail}`}
               className="rounded-[1.25rem] border border-white/10 bg-[#0d1520] p-4"
             >
-              <h3 className="text-sm font-semibold text-white">{item.title}</h3>
-              <p className="mt-2 text-sm leading-6 text-slate-300">{item.detail}</p>
-              {item.evidence.length > 0 ? (
-                <ul className="mt-3 grid gap-2 text-sm text-slate-400">
-                  {item.evidence.map((entry) => (
-                    <li key={entry} className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
-                      {entry}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
+              <h3 className="text-sm font-semibold text-white">{sanitizeNarrativeTitle(item.title)}</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-300">{sanitizeNarrativeText(item.detail)}</p>
             </article>
           ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MiniBarChart({
+  title,
+  items,
+  emptyMessage,
+  locale,
+}: {
+  title: string;
+  items: ChartDatum[];
+  emptyMessage: string;
+  locale: string;
+}) {
+  const maxValue = Math.max(...items.map((item) => item.value), 0);
+
+  return (
+    <section className="rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold text-white">{title}</h2>
+        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-400">
+          {items.length} items
+        </span>
+      </div>
+      {items.length === 0 ? (
+        <p className="mt-4 text-sm text-slate-400">{emptyMessage}</p>
+      ) : (
+        <div className="mt-4 grid gap-3">
+          {items.map((item) => {
+            const width = maxValue > 0 ? Math.max((item.value / maxValue) * 100, 8) : 8;
+            return (
+              <article
+                key={item.label}
+                className="rounded-[1.25rem] border border-white/10 bg-[#0d1520] p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-white">{item.label}</p>
+                    {item.secondary ? (
+                      <p className="mt-1 text-xs uppercase tracking-[0.16em] text-slate-500">
+                        {item.secondary}
+                      </p>
+                    ) : null}
+                  </div>
+                  <p className="text-sm font-semibold text-slate-200">
+                    {formatNumber(item.value, locale)}
+                  </p>
+                </div>
+                <div className="mt-3 h-2 rounded-full bg-white/5">
+                  <div
+                    className="h-2 rounded-full bg-[linear-gradient(90deg,#f3c15b_0%,#47bf8f_100%)]"
+                    style={{ width: `${width}%` }}
+                  />
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
     </section>
@@ -219,12 +394,40 @@ export default async function ReportPage({ params }: ReportPageProps) {
 
   const summaryPills = report
     ? [
-        `${report.score} score`,
-        `${report.grade} grade`,
         `${report.summary.locationCount} locations`,
-        `${report.execution.includedIntegrations.length} included integrations`,
+        `${report.execution.includedIntegrations.length} connected sources`,
+        reportPeriod.baselinePeriodKey
+          ? `Compared with ${reportPeriod.baselinePeriodKey}`
+          : "No comparison month selected",
+        `${report.findings.length} findings reviewed`,
       ]
     : [`${detail.contextEntries.length} context entries`, `${detail.reportPeriod.status} status`];
+  const framework = buildFrameworkFallback(report);
+  const visibleConfidenceNotes = report ? getClientVisibleConfidenceNotes(report) : [];
+  const acquisitionChart = report
+    ? (report.snapshot.trafficAttribution?.topSourceMediums ?? [])
+        .slice(0, 5)
+        .map((item) => ({
+          label: `${item.source} / ${item.medium}`,
+          value: item.sessions,
+          secondary: `${Math.round(item.share * 100)}% share`,
+        }))
+    : [];
+  const campaignChart = report
+    ? getMeaningfulPaidCampaigns(report)
+        .slice(0, 5)
+        .map((campaign) => ({
+          label: campaign.name,
+          value: campaign.spend,
+          secondary: report && inferObjectiveForReport(report).kind === "lead_generation"
+            ? `CPL ${formatNumber(campaignCostPerConversion(campaign), locale, 2)}`
+            : campaign.roas == null
+              ? "ROAS N/A"
+              : `ROAS ${campaign.roas.toFixed(2)}`,
+        }))
+    : [];
+  const headlineMetrics = report ? deriveHeadlineMetrics(report) : [];
+  const objective = report ? inferObjectiveForReport(report) : null;
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(243,193,91,0.12),transparent_24%),radial-gradient(circle_at_85%_12%,rgba(53,130,246,0.16),transparent_18%),linear-gradient(180deg,#091019_0%,#0b111a_48%,#0a0f16_100%)] px-4 py-8 text-slate-100 sm:px-6 lg:px-8">
@@ -239,7 +442,8 @@ export default async function ReportPage({ params }: ReportPageProps) {
                 {access.client.name} · {reportPeriod.periodKey}
               </h1>
               <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-300">
-                Structured monthly reporting with period metadata, business context, hypothesis framing, and exportable client output.
+                Monthly performance report built from connected platform data, comparison periods,
+                and operational context captured by the team.
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <span className={`rounded-full border px-3 py-2 text-[11px] uppercase tracking-[0.22em] ${statusTone(detail.reportPeriod.status)}`}>
@@ -250,7 +454,7 @@ export default async function ReportPage({ params }: ReportPageProps) {
                 </span>
                 {reportPeriod.baselinePeriodKey ? (
                   <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.22em] text-slate-300">
-                    Baseline {reportPeriod.baselinePeriodKey}
+                    Compared with {reportPeriod.baselinePeriodKey}
                   </span>
                 ) : null}
               </div>
@@ -300,31 +504,18 @@ export default async function ReportPage({ params }: ReportPageProps) {
           </div>
         </section>
 
-        <section className="mt-6 grid gap-4 lg:grid-cols-4">
-          <article className="rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
-            <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Generated</p>
-            <p className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-white">
-              {formatDateTime(reportPeriod.generatedAt, locale)}
-            </p>
-          </article>
-          <article className="rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
-            <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Leads</p>
-            <p className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-white">
-              {formatNumber(reportPeriod.manualInputs.leads, locale)}
-            </p>
-          </article>
-          <article className="rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
-            <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Sales</p>
-            <p className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-white">
-              {formatNumber(reportPeriod.manualInputs.sales, locale)}
-            </p>
-          </article>
-          <article className="rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
-            <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Revenue</p>
-            <p className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-white">
-              {formatNumber(reportPeriod.manualInputs.revenue, locale)}
-            </p>
-          </article>
+        <section className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          {headlineMetrics.map((metric) => (
+            <article
+              key={metric.key}
+              className="rounded-[1.5rem] border border-white/10 bg-[#111925] p-5"
+            >
+              <p className="text-xs uppercase tracking-[0.28em] text-slate-500">{metric.label}</p>
+              <p className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-white">
+                {formatNumber(metric.value, locale, metric.digits ?? 0)}
+              </p>
+            </article>
+          ))}
         </section>
 
         {reportPeriod.manualInputs.notes ? (
@@ -341,15 +532,18 @@ export default async function ReportPage({ params }: ReportPageProps) {
             <section className="mt-6 rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-semibold text-white">Executive summary</h2>
+                  <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                    {getNarrativeHeadline(framework!, report)}
+                  </p>
+                  <h2 className="mt-2 text-lg font-semibold text-white">Executive summary</h2>
                   <p className="mt-2 text-sm leading-6 text-slate-300">
-                    {report.clientIndustryLabel} report focused on {report.reportFocus.replaceAll("_", " ")} with {report.summary.supportedSections.length} supported sections.
+                    {sanitizeNarrativeText(framework?.executiveSummary ?? "")}
                   </p>
                 </div>
                 <div className="grid gap-2 text-sm text-slate-300">
                   <span>Top risks: {report.summary.topRisks.length}</span>
                   <span>Strengths: {report.summary.strengths.length}</span>
-                  <span>Findings: {report.findings.length}</span>
+                  <span>Compared with: {reportPeriod.baselinePeriodKey ?? "none"}</span>
                 </div>
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -386,38 +580,84 @@ export default async function ReportPage({ params }: ReportPageProps) {
               </div>
             </section>
 
+            {report && objective?.kind === "lead_generation" ? (
+              <section className="mt-6 rounded-[1.5rem] border border-[#8f7a2f]/30 bg-[#161a16] p-5">
+                <h2 className="text-lg font-semibold text-white">Lead generation lens</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  This report is being interpreted as a lead-generation report. Paid media performance
+                  is prioritized around {objective.primaryConversionLabel.toLowerCase()}, spend, and cost per lead
+                  rather than ROAS.
+                </p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-[1.25rem] border border-white/10 bg-[#0d1520] p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{objective.primaryConversionLabel}</p>
+                    <p className="mt-2 text-2xl font-semibold text-white">
+                      {formatNumber(report.snapshot.paidMedia?.purchases, locale, 0)}
+                    </p>
+                  </div>
+                  <div className="rounded-[1.25rem] border border-white/10 bg-[#0d1520] p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Spend</p>
+                    <p className="mt-2 text-2xl font-semibold text-white">
+                      {formatNumber(report.snapshot.paidMedia?.spend, locale, 2)}
+                    </p>
+                  </div>
+                  <div className="rounded-[1.25rem] border border-white/10 bg-[#0d1520] p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Cost per lead</p>
+                    <p className="mt-2 text-2xl font-semibold text-white">
+                      {formatNumber(costPerConversion(report.snapshot.paidMedia), locale, 2)}
+                    </p>
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
+            <section className="mt-6 grid gap-4 xl:grid-cols-3">
+              <NarrativeSection
+                title="Key outcomes"
+                items={sanitizeNarrativeItems(framework?.whatHappened ?? [])}
+                emptyMessage="No primary result narrative was generated for this period."
+              />
+              <NarrativeSection
+                title="What influenced the month"
+                items={sanitizeNarrativeItems(framework?.whyItHappened ?? [])}
+                emptyMessage="No explanation layer was generated yet."
+              />
+              <NarrativeSection
+                title="Next actions"
+                items={sanitizeNarrativeItems(framework?.whatWeAreDoing ?? [])}
+                emptyMessage="No next-step plan was generated yet."
+              />
+            </section>
+
             <section className="mt-6 grid gap-4 xl:grid-cols-2">
-              <NarrativeSection
-                title="Data facts"
-                items={report.dataFacts}
-                emptyMessage="No data facts were generated for this period."
+              <MiniBarChart
+                title="Acquisition mix"
+                items={acquisitionChart}
+                emptyMessage="No acquisition mix data is available yet."
+                locale={locale}
               />
-              <NarrativeSection
-                title="Provided context"
-                items={report.providedContext}
-                emptyMessage="No contextual inputs were attached to the report payload."
-              />
-              <NarrativeSection
-                title="Hypotheses"
-                items={report.hypotheses}
-                emptyMessage="No explanatory hypotheses were generated yet."
-              />
-              <NarrativeSection
-                title="Recommendations"
-                items={report.recommendations}
-                emptyMessage="No next-step recommendations were generated yet."
+              <MiniBarChart
+                title="Paid spend by campaign"
+                items={campaignChart}
+                emptyMessage="No paid media campaign data is available yet."
+                locale={locale}
               />
             </section>
 
             <section className="mt-6 rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-semibold text-white">Confidence notes</h2>
+                <h2 className="text-lg font-semibold text-white">Data coverage notes</h2>
                 <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-400">
-                  {report.confidenceNotes.length} notes
+                  {visibleConfidenceNotes.length} notes
                 </span>
               </div>
               <div className="mt-4 grid gap-3">
-                {report.confidenceNotes.map((note) => (
+                {visibleConfidenceNotes.length === 0 ? (
+                  <p className="text-sm text-slate-400">
+                    No special data coverage limitations were flagged for this report.
+                  </p>
+                ) : (
+                  visibleConfidenceNotes.map((note) => (
                   <article
                     key={`${note.label}-${note.detail}`}
                     className={`rounded-[1.25rem] border p-4 ${confidenceTone(note.level)}`}
@@ -425,7 +665,8 @@ export default async function ReportPage({ params }: ReportPageProps) {
                     <p className="text-sm font-semibold">{note.label}</p>
                     <p className="mt-2 text-sm leading-6 opacity-90">{note.detail}</p>
                   </article>
-                ))}
+                  ))
+                )}
               </div>
             </section>
           </>
