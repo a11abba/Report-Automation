@@ -498,6 +498,7 @@ export function DashboardShell({
     initialData.clients[0] ? [initialData.clients[0].id] : [],
   );
   const [expandedIntegrationIds, setExpandedIntegrationIds] = useState<Record<string, boolean>>({});
+  const [isReportLibraryExpanded, setIsReportLibraryExpanded] = useState(false);
   const attemptedAutoConfigurations = useRef(new Set<string>());
   const { data } = useQuery({
     queryKey: ["dashboard"],
@@ -1093,7 +1094,7 @@ export function DashboardShell({
               id="report-library"
               className="mt-6 rounded-[2rem] border border-white/10 bg-[#121a26] p-6 shadow-[0_24px_70px_rgba(0,0,0,0.24)]"
             >
-              <div className="grid gap-6 xl:grid-cols-[0.88fr_1.12fr]">
+              <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
                     Report memory library
@@ -1101,11 +1102,36 @@ export function DashboardShell({
                   <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">
                     Feed the assistant with strong legacy examples
                   </h2>
-                  <p className="mt-3 text-sm leading-6 text-slate-400">
+                  <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-400">
                     Paste old reports that represent the quality, tone, and framing you want.
                     They do not train the model globally. They work as account-scoped reference
                     material that can be attached to new clients when you create them.
                   </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-slate-300">
+                    {scopedReportMemories.length} saved
+                  </span>
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.2em] text-slate-300">
+                    {isReportLibraryExpanded ? "Open" : "Closed"}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 transition hover:bg-white/[0.08]"
+                    onClick={() => setIsReportLibraryExpanded((current) => !current)}
+                  >
+                    {isReportLibraryExpanded ? "Collapse library" : "Open library"}
+                  </button>
+                </div>
+              </div>
+
+              {!isReportLibraryExpanded ? (
+                <div className="mt-5 rounded-[1.5rem] border border-dashed border-white/12 bg-[#0f1723] px-5 py-4 text-sm text-slate-400">
+                  Keep this closed until you need to upload or review legacy reference reports.
+                </div>
+              ) : (
+                <div className="mt-6 grid gap-6 xl:grid-cols-[0.88fr_1.12fr]">
+                  <div>
                     <form
                       className="mt-5 grid gap-3"
                       onSubmit={(event) => {
@@ -1172,60 +1198,61 @@ export function DashboardShell({
                       {pending ? "Saving..." : "Save to library"}
                     </button>
                   </form>
-                </div>
+                  </div>
 
-                <div className="grid gap-3">
-                  {scopedReportMemories.length === 0 ? (
-                    <EmptyState
-                      text="No reference reports saved yet. Paste one strong legacy report and it will become reusable context for future clients."
-                      compact
-                    />
-                  ) : (
-                    scopedReportMemories.map((memory) => (
-                      <article
-                        key={memory.id}
-                        className="rounded-[1.5rem] border border-white/10 bg-[#182230] p-5"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <h3 className="truncate text-lg font-semibold text-white">
-                              {memory.title}
-                            </h3>
-                            <p className="mt-1 text-sm text-slate-400">
-                              {[memory.sourceClientName, memory.periodLabel]
-                                .filter(Boolean)
-                                .join(" · ") || "General reference"}
-                            </p>
+                  <div className="grid gap-3">
+                    {scopedReportMemories.length === 0 ? (
+                      <EmptyState
+                        text="No reference reports saved yet. Paste one strong legacy report and it will become reusable context for future clients."
+                        compact
+                      />
+                    ) : (
+                      scopedReportMemories.map((memory) => (
+                        <article
+                          key={memory.id}
+                          className="rounded-[1.5rem] border border-white/10 bg-[#182230] p-5"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <h3 className="truncate text-lg font-semibold text-white">
+                                {memory.title}
+                              </h3>
+                              <p className="mt-1 text-sm text-slate-400">
+                                {[memory.sourceClientName, memory.periodLabel]
+                                  .filter(Boolean)
+                                  .join(" · ") || "General reference"}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              className="rounded-full border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-rose-200 transition hover:bg-rose-500/15"
+                              onClick={() => {
+                                if (!window.confirm(`Remove reference "${memory.title}"?`)) {
+                                  return;
+                                }
+                                runTask(
+                                  () => deleteJson(`/api/report-memories/${memory.id}`),
+                                  `Reference report "${memory.title}" removed.`,
+                                );
+                              }}
+                            >
+                              Remove
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            className="rounded-full border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs uppercase tracking-[0.2em] text-rose-200 transition hover:bg-rose-500/15"
-                            onClick={() => {
-                              if (!window.confirm(`Remove reference "${memory.title}"?`)) {
-                                return;
-                              }
-                              runTask(
-                                () => deleteJson(`/api/report-memories/${memory.id}`),
-                                `Reference report "${memory.title}" removed.`,
-                              );
-                            }}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                        {memory.notes ? (
-                          <p className="mt-3 text-sm leading-6 text-slate-300">{memory.notes}</p>
-                        ) : null}
-                        <p className="mt-3 text-sm leading-6 text-slate-400">
-                          {memory.content.length > 300
-                            ? `${memory.content.slice(0, 300).trimEnd()}...`
-                            : memory.content}
-                        </p>
-                      </article>
-                    ))
-                  )}
+                          {memory.notes ? (
+                            <p className="mt-3 text-sm leading-6 text-slate-300">{memory.notes}</p>
+                          ) : null}
+                          <p className="mt-3 text-sm leading-6 text-slate-400">
+                            {memory.content.length > 300
+                              ? `${memory.content.slice(0, 300).trimEnd()}...`
+                              : memory.content}
+                          </p>
+                        </article>
+                      ))
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </section>
 
             <section id="workspace" className="mt-6">
