@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { attachReportMemoryRecordToClient, createClientRecord } from "@/lib/audit-engine";
+import {
+  attachReportMemoryRecordToClient,
+  createClientRecord,
+  createReportMemoryRecord,
+} from "@/lib/audit-engine";
 import { canManagePlatform } from "@/lib/auth-access";
 import { reportFocuses, reportLanguages } from "@/lib/audit/types";
 import { assertSafeAuditUrl } from "@/lib/audit-url";
+import { extractTextFromPdfFile } from "@/lib/report-memory-import";
 import { getStore } from "@/lib/storage";
 import { requireRouteViewer } from "@/lib/route-auth";
 
@@ -39,11 +44,47 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Forbidden." }, { status: 403 });
   }
   try {
-    const body = createClientSchema.parse(await request.json());
+    let bodyInput: z.input<typeof createClientSchema>;
+    let latestReferenceReportPdf: File | null = null;
+    const contentType = request.headers.get("content-type") ?? "";
+
+    if (contentType.includes("multipart/form-data")) {
+      const formData = await request.formData();
+      const pdfValue = formData.get("latestReferenceReportPdf");
+      latestReferenceReportPdf =
+        pdfValue instanceof File && pdfValue.size > 0 ? pdfValue : null;
+      bodyInput = {
+        accountId: String(formData.get("accountId") ?? "") || undefined,
+        name: String(formData.get("name") ?? ""),
+        industry: String(formData.get("industry") ?? ""),
+        industryLabelPt: String(formData.get("industryLabelPt") ?? "") || null,
+        operatingModel: (
+          String(formData.get("operatingModel") ?? "single_source") || "single_source"
+        ) as z.input<typeof createClientSchema>["operatingModel"],
+        primaryDomain: String(formData.get("primaryDomain") ?? "") || null,
+        reportLanguage: (
+          String(formData.get("reportLanguage") ?? "pt-BR") || "pt-BR"
+        ) as z.input<typeof createClientSchema>["reportLanguage"],
+        reportFocus: (
+          String(formData.get("reportFocus") ?? "full_funnel") || "full_funnel"
+        ) as z.input<typeof createClientSchema>["reportFocus"],
+        reportIntro: String(formData.get("reportIntro") ?? "").trim() || null,
+        reportBenchmarks: String(formData.get("reportBenchmarks") ?? "").trim() || null,
+        referenceReportNotes:
+          String(formData.get("referenceReportNotes") ?? "").trim() || null,
+        initialReportMemoryId:
+          String(formData.get("initialReportMemoryId") ?? "").trim() || null,
+      };
+    } else {
+      bodyInput = await request.json();
+    }
+
+    const body = createClientSchema.parse(bodyInput);
     const primaryDomain = body.primaryDomain
       ? await assertSafeAuditUrl(body.primaryDomain)
       : null;
-    const client = await createClientRecord(body.accountId ?? viewer.accountId, {
+    const accountId = body.accountId ?? viewer.accountId;
+    const client = await createClientRecord(accountId, {
       name: body.name,
       industry: body.industry,
       industryLabelPt: body.industryLabelPt ?? null,
@@ -57,6 +98,18 @@ export async function POST(request: Request) {
     });
     if (body.initialReportMemoryId) {
       await attachReportMemoryRecordToClient(client.id, body.initialReportMemoryId);
+    }
+    if (latestReferenceReportPdf) {
+      const importedReport = await extractTextFromPdfFile(latestReferenceReportPdf);
+      const reportMemory = await createReportMemoryRecord(accountId, {
+        title: importedReport.title,
+        sourceClientName: body.name,
+        periodLabel: "Latest pre-platform PDF reference",
+        notes:
+          "Imported automatically during client creation from the uploaded latest PDF report.",
+        content: importedReport.content,
+      });
+      await attachReportMemoryRecordToClient(client.id, reportMemory.id);
     }
     return NextResponse.json({ client }, { status: 201 });
   } catch (error) {

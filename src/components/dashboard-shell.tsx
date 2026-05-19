@@ -15,7 +15,7 @@ import {
   ReportPeriodPanel,
   type ReportPeriodView,
 } from "@/components/report-period-panel";
-import { deleteJson, getJson, patchJson, postJson } from "@/lib/api-client";
+import { deleteJson, getJson, patchJson, postForm, postJson } from "@/lib/api-client";
 import type { AuthSession } from "@/lib/auth-session";
 import { getReportFocusLabel } from "@/lib/report-focus";
 import type {
@@ -961,34 +961,10 @@ export function DashboardShell({
                     onSubmit={(event) => {
                       event.preventDefault();
                       const formData = new FormData(event.currentTarget);
-                      const accountId = String(formData.get("accountId") ?? "");
+                      const requestBody = new FormData(event.currentTarget);
                       const name = String(formData.get("name") ?? "");
-                      const industry = String(formData.get("industry") ?? "");
-                      const industryLabelPt = String(formData.get("industryLabelPt") ?? "");
-                      const primaryDomain = String(formData.get("primaryDomain") ?? "");
-                      const operatingModel = String(formData.get("operatingModel") ?? "single_source");
-                      const reportLanguage = String(formData.get("reportLanguage") ?? "pt-BR");
-                      const reportFocus = String(formData.get("reportFocus") ?? "full_funnel");
-                      const reportIntro = String(formData.get("reportIntro") ?? "");
-                      const reportBenchmarks = String(formData.get("reportBenchmarks") ?? "");
-                      const referenceReportNotes = String(formData.get("referenceReportNotes") ?? "");
-                      const initialReportMemoryId = String(formData.get("initialReportMemoryId") ?? "");
                       runTask(
-                        () =>
-                          postJson("/api/clients", {
-                            accountId,
-                            name,
-                            industry,
-                            industryLabelPt: industryLabelPt || null,
-                            operatingModel,
-                            primaryDomain: primaryDomain || null,
-                            reportLanguage,
-                            reportFocus,
-                            reportIntro: reportIntro || null,
-                            reportBenchmarks: reportBenchmarks || null,
-                            referenceReportNotes: referenceReportNotes || null,
-                            initialReportMemoryId: initialReportMemoryId || null,
-                          }),
+                        () => postForm("/api/clients", requestBody),
                         `Client "${name}" created.`,
                       );
                       event.currentTarget.reset();
@@ -1069,6 +1045,22 @@ export function DashboardShell({
                         </option>
                       ))}
                     </select>
+                    <div className="rounded-[1.5rem] border border-dashed border-white/12 bg-[#0e1621] px-4 py-4">
+                      <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                        Latest report PDF
+                      </p>
+                      <p className="mt-2 text-sm leading-6 text-slate-400">
+                        Upload the client&apos;s latest PDF report and the platform will extract the
+                        text, save it to the reference library, and attach it to this new client
+                        automatically.
+                      </p>
+                      <input
+                        name="latestReferenceReportPdf"
+                        type="file"
+                        accept="application/pdf,.pdf"
+                        className="mt-4 block w-full rounded-2xl border border-white/10 bg-[#111925] px-4 py-3 text-sm text-slate-100 file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-sm file:font-semibold file:text-[#101720]"
+                      />
+                    </div>
                     <button
                       type="submit"
                       className="rounded-full bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-5 py-3 text-sm font-semibold text-[#11161f] shadow-[0_18px_40px_rgba(243,193,91,0.25)] disabled:opacity-50"
