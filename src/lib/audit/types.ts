@@ -2,6 +2,7 @@ export const platformTypes = [
   "messaging_automation",
   "crm",
   "commerce_pos",
+  "task_management",
   "search_visibility",
   "local_presence",
   "web_analytics",
@@ -18,6 +19,7 @@ export const platformKeys = [
   "square",
   "lightspeed",
   "clover",
+  "wrike",
   "google_search_console",
   "google_business_profile",
   "google_analytics",
@@ -47,6 +49,7 @@ export const auditCapabilities = [
   "technical_seo",
   "location_rollup",
   "paid_media_performance",
+  "task_context",
 ] as const;
 
 export const findingSeverities = ["critical", "high", "medium", "low"] as const;
@@ -88,6 +91,7 @@ export const contextEntryTypes = [
   "tracking_issue",
   "sales_issue",
   "seo_change",
+  "task_update",
   "other",
 ] as const;
 export const confidenceLevels = ["info", "warning"] as const;
@@ -184,6 +188,11 @@ export interface PaidMediaSection {
   purchaseValue: number;
   roas: number | null;
   topCampaigns: PaidMediaCampaignSnapshot[];
+}
+
+export interface PaidMediaSourceSection extends PaidMediaSection {
+  platformKey: PlatformKey;
+  platformLabel: string;
 }
 
 export interface AutomationFlowSnapshot {
@@ -417,6 +426,33 @@ export interface IntegrationHealthSection {
   healthyIntegrationCount: number;
 }
 
+export interface TaskManagementItemSnapshot {
+  id: string;
+  title: string;
+  status: string;
+  importance: "High" | "Normal" | "Low" | string | null;
+  permalink: string | null;
+  dueDate: string | null;
+  updatedAt: string | null;
+}
+
+export interface TaskManagementSection {
+  supportState: SupportState;
+  provider: string;
+  folderId: string | null;
+  folderName: string | null;
+  totalTasks: number;
+  activeTasks: number;
+  completedTasks: number;
+  overdueTasks: number;
+  highImportanceTasks: number;
+  recentlyUpdatedTasks: TaskManagementItemSnapshot[];
+  actionedTasks: TaskManagementItemSnapshot[];
+  completedTasksInPeriod: TaskManagementItemSnapshot[];
+  activeTasksTouchedInPeriod: TaskManagementItemSnapshot[];
+  overdueOrBlockedTasks: TaskManagementItemSnapshot[];
+}
+
 export interface NormalizedBusinessSnapshot {
   clientId: string;
   clientName: string;
@@ -432,6 +468,7 @@ export interface NormalizedBusinessSnapshot {
   };
   campaigns: CampaignAnalyticsSection | null;
   paidMedia: PaidMediaSection | null;
+  paidMediaSources: PaidMediaSourceSection[];
   automations: AutomationSection | null;
   audiences: AudienceSection | null;
   deliverability: DeliverabilitySection | null;
@@ -446,6 +483,7 @@ export interface NormalizedBusinessSnapshot {
   reputation: ReputationSection | null;
   trafficAttribution: TrafficAttributionSection | null;
   website: WebsiteSection | null;
+  taskManagement: TaskManagementSection | null;
   locations: LocationSnapshot[];
   integrations: IntegrationHealthSection;
   operationalFlags: string[];
@@ -528,6 +566,14 @@ export interface ReportConfidenceNote {
   level: ConfidenceLevel;
 }
 
+export interface ReportIntegrationCoverageItem {
+  id: string;
+  label: string;
+  platformKey: PlatformKey;
+  status: "included" | "not_live_ready" | "skipped";
+  reason: string | null;
+}
+
 export const reportFrameworkStatuses = ["strong", "watch", "weak"] as const;
 export type ReportFrameworkStatus = (typeof reportFrameworkStatuses)[number];
 
@@ -540,6 +586,7 @@ export interface ReportFrameworkPillar {
 
 export interface ReportFrameworkSections {
   executiveSummary: string;
+  clientEmailDraft: string;
   whatHappened: ReportNarrativeItem[];
   whyItHappened: ReportNarrativeItem[];
   whatWeAreDoing: ReportNarrativeItem[];
@@ -576,6 +623,7 @@ export interface AuditReportPayload {
       platformKey: PlatformKey;
       reason: string;
     }>;
+    coverage: ReportIntegrationCoverageItem[];
   };
   sectionScores: SectionScore[];
   locationScores: LocationScore[];
@@ -761,6 +809,8 @@ export interface IntegrationSettings {
   microsoftAccountId?: string | null;
   merchantStoreId?: string | null;
   merchantFeedId?: string | null;
+  taskFolderId?: string | null;
+  taskFolderName?: string | null;
   locationIds?: string[];
   extensionContext?: {
     detectedUrl?: string;

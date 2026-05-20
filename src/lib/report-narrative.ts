@@ -95,6 +95,7 @@ function contextTypeLabel(locale: ReportLanguage, type: ContextEntryRecord["entr
       tracking_issue: "Tracking issue",
       sales_issue: "Sales issue",
       seo_change: "SEO change",
+      task_update: "Agency task update",
       other: "Context entry",
     },
     "pt-BR": {
@@ -105,6 +106,7 @@ function contextTypeLabel(locale: ReportLanguage, type: ContextEntryRecord["entr
       tracking_issue: "Problema de tracking",
       sales_issue: "Problema comercial",
       seo_change: "Mudanca de SEO",
+      task_update: "Atualização de tarefas da agência",
       other: "Contexto informado",
     },
     "pt-PT": {
@@ -115,6 +117,7 @@ function contextTypeLabel(locale: ReportLanguage, type: ContextEntryRecord["entr
       tracking_issue: "Problema de tracking",
       sales_issue: "Problema comercial",
       seo_change: "Mudanca de SEO",
+      task_update: "Atualização de tarefas da agência",
       other: "Contexto informado",
     },
   } as const;
@@ -275,6 +278,44 @@ function buildProvidedContext(locale: ReportLanguage, contextEntries: ContextEnt
       `${entry.authorName} <${entry.authorEmail}>`,
     ],
   }));
+}
+
+function buildTaskManagementFacts(
+  locale: ReportLanguage,
+  snapshot: NormalizedBusinessSnapshot,
+) {
+  if (!snapshot.taskManagement) {
+    return [];
+  }
+
+  const taskContext = snapshot.taskManagement;
+  const folderLabel = taskContext.folderName ?? taskContext.folderId ?? "client folder";
+  const actionedTasks = taskContext.actionedTasks ?? [];
+  const completedTasksInPeriod = taskContext.completedTasksInPeriod ?? [];
+  const activeTasksTouchedInPeriod = taskContext.activeTasksTouchedInPeriod ?? [];
+  const overdueOrBlockedTasks = taskContext.overdueOrBlockedTasks ?? [];
+  return [
+    {
+      title: locale === "en" ? "Agency task context" : "Contexto de tarefas da agência",
+      detail:
+        actionedTasks.length > 0
+          ? locale === "en"
+            ? `${taskContext.provider} shows ${formatNumber(locale, actionedTasks.length)} tasks touched during the report month in ${folderLabel}, including ${formatNumber(locale, completedTasksInPeriod.length)} completed actions and ${formatNumber(locale, activeTasksTouchedInPeriod.length)} active follow-ups.`
+            : `O ${taskContext.provider} mostra ${formatNumber(locale, actionedTasks.length)} tarefas movimentadas no mês do relatório em ${folderLabel}, incluindo ${formatNumber(locale, completedTasksInPeriod.length)} ações concluídas e ${formatNumber(locale, activeTasksTouchedInPeriod.length)} acompanhamentos ativos.`
+          : locale === "en"
+            ? `${taskContext.provider} shows ${formatNumber(locale, taskContext.completedTasks)} completed tasks and ${formatNumber(locale, taskContext.activeTasks)} active tasks in ${folderLabel}, but no task updates were dated inside this report month.`
+            : `O ${taskContext.provider} mostra ${formatNumber(locale, taskContext.completedTasks)} tarefas concluídas e ${formatNumber(locale, taskContext.activeTasks)} tarefas ativas em ${folderLabel}, mas nenhuma atualização de tarefa ficou datada dentro deste mês de relatório.`,
+      evidence: [
+        `Total tasks: ${formatNumber(locale, taskContext.totalTasks)}`,
+        `Tasks touched in period: ${formatNumber(locale, actionedTasks.length)}`,
+        `Completed in period: ${formatNumber(locale, completedTasksInPeriod.length)}`,
+        `Active touched in period: ${formatNumber(locale, activeTasksTouchedInPeriod.length)}`,
+        ...(overdueOrBlockedTasks.length > 0
+          ? [`Overdue or blocked tasks: ${formatNumber(locale, overdueOrBlockedTasks.length)}`]
+          : []),
+      ],
+    },
+  ];
 }
 
 function buildHypotheses(
@@ -447,8 +488,28 @@ function buildWhatWeAreDoing(
   locale: ReportLanguage,
   recommendations: ReportNarrativeItem[],
   findings: AuditFinding[],
+  taskManagement: NormalizedBusinessSnapshot["taskManagement"],
 ) {
   const items = [...recommendations];
+
+  if (taskManagement?.actionedTasks?.length || taskManagement?.recentlyUpdatedTasks.length) {
+    const activeTasks = (taskManagement.activeTasksTouchedInPeriod?.length
+      ? taskManagement.activeTasksTouchedInPeriod
+      : taskManagement.recentlyUpdatedTasks
+    ).filter(
+      (task) => !["Completed", "Cancelled"].includes(task.status),
+    );
+    if (activeTasks.length > 0) {
+      items.unshift({
+        title: locale === "en" ? "Agency follow-through" : "Acompanhamento da agência",
+        detail:
+          locale === "en"
+            ? `We are using the tasks touched during this report month in ${taskManagement.provider} to keep the next actions tied to real delivery work, not only recommendations in the report.`
+            : `Estamos usando as tarefas movimentadas neste mês no ${taskManagement.provider} para manter os próximos passos ligados ao trabalho real de entrega, não apenas a recomendações do relatório.`,
+        evidence: activeTasks.slice(0, 3).map((task) => `${task.title} (${task.status})`),
+      });
+    }
+  }
 
   if (items.length === 0) {
     for (const finding of findings.filter((finding) => finding.status !== "passing").slice(0, 3)) {
@@ -494,6 +555,51 @@ function buildExecutiveSummary(
   return [resultSentence, whySentence, actionSentence]
     .filter(Boolean)
     .join(" ");
+}
+
+function buildClientEmailDraft(
+  locale: ReportLanguage,
+  reportPeriod: ReportPeriodReference,
+  whatHappened: ReportNarrativeItem[],
+  whyItHappened: ReportNarrativeItem[],
+  whatWeAreDoing: ReportNarrativeItem[],
+) {
+  const subjectPeriod = reportPeriod.periodKey ?? (locale === "en" ? "this month" : "este mês");
+  const resultSentence = whatHappened[0]?.detail ?? "";
+  const whySentence = whyItHappened[0]?.detail ?? "";
+  const actionSentence = whatWeAreDoing[0]?.detail ?? "";
+
+  if (locale === "en") {
+    return [
+      `Subject: ${subjectPeriod} performance update`,
+      "",
+      "Hi,",
+      "",
+      `We reviewed the ${subjectPeriod} report and wanted to share the main read in plain language.`,
+      resultSentence,
+      whySentence,
+      actionSentence ? `Our position from here is to keep moving on this next step: ${actionSentence}` : "",
+      "",
+      "We will keep monitoring the data and the operational context together so the next update reflects both performance and the work happening behind it.",
+    ]
+      .filter((line) => line !== "")
+      .join("\n");
+  }
+
+  return [
+    `Assunto: Atualização de performance de ${subjectPeriod}`,
+    "",
+    "Olá,",
+    "",
+    `Revisamos o relatório de ${subjectPeriod} e queríamos compartilhar a principal leitura de forma direta.`,
+    resultSentence,
+    whySentence,
+    actionSentence ? `Nossa posição a partir daqui é seguir com este próximo passo: ${actionSentence}` : "",
+    "",
+    "Vamos continuar acompanhando os dados junto com o contexto operacional, para que a próxima atualização reflita tanto a performance quanto o trabalho que está acontecendo por trás dela.",
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
 }
 
 function buildCcipaPillars(
@@ -663,6 +769,7 @@ export function buildNarrativeSections(input: {
     input.baselineReport,
     input.contextEntries,
   );
+  const taskManagementFacts = buildTaskManagementFacts(input.locale, input.snapshot);
   const providedContext = buildProvidedContext(input.locale, input.contextEntries);
   const hypotheses = buildHypotheses(
     input.locale,
@@ -682,7 +789,7 @@ export function buildNarrativeSections(input: {
     input.baselineReport,
     input.contextEntries,
   );
-  const whatHappened = buildWhatHappened(input.locale, dataFacts, input.findings);
+  const whatHappened = buildWhatHappened(input.locale, [...taskManagementFacts, ...dataFacts], input.findings);
   const whyItHappened = buildWhyItHappened(
     input.locale,
     hypotheses,
@@ -692,10 +799,18 @@ export function buildNarrativeSections(input: {
     input.locale,
     recommendations,
     input.findings,
+    input.snapshot.taskManagement,
   );
   const framework: ReportFrameworkSections = {
     executiveSummary: buildExecutiveSummary(
       input.locale,
+      whatHappened,
+      whyItHappened,
+      whatWeAreDoing,
+    ),
+    clientEmailDraft: buildClientEmailDraft(
+      input.locale,
+      input.reportPeriod,
       whatHappened,
       whyItHappened,
       whatWeAreDoing,
@@ -716,7 +831,7 @@ export function buildNarrativeSections(input: {
   };
 
   return {
-    dataFacts,
+    dataFacts: [...taskManagementFacts, ...dataFacts],
     providedContext,
     hypotheses,
     recommendations,

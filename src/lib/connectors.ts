@@ -32,6 +32,7 @@ import {
   PageSpeedConnector,
   WebsiteCrawlerConnector,
 } from "./website-connectors";
+import { WrikeConnector } from "./task-management-connectors";
 
 export interface ConnectorContext {
   client: ClientRecord;
@@ -109,6 +110,7 @@ export function baseSnapshot(
     },
     campaigns: null,
     paidMedia: null,
+    paidMediaSources: [],
     automations: null,
     audiences: null,
     deliverability: null,
@@ -123,6 +125,7 @@ export function baseSnapshot(
     reputation: null,
     trafficAttribution: null,
     website: null,
+    taskManagement: null,
     locations: [],
     integrations: {
       supportState: "supported",
@@ -144,6 +147,7 @@ const connectors: Record<PlatformKey, PlatformConnector> = {
   square: new ShopifyConnector("square"),
   lightspeed: new ShopifyConnector("lightspeed"),
   clover: new ShopifyConnector("clover"),
+  wrike: new WrikeConnector(),
   google_search_console: new GoogleSearchConsoleConnector(),
   google_business_profile: new GoogleBusinessProfileConnector(),
   google_analytics: new GoogleAnalyticsConnector(),
@@ -182,6 +186,15 @@ export const platformCatalog: PlatformDefinition[] = [
     capabilities: connectors.shopify.capabilities(),
     authModes: ["api_key", "oauth", "none"],
     description: "Catalog, order, retention, and commerce integration health audits.",
+  },
+  {
+    key: "wrike",
+    type: "task_management",
+    name: "Wrike",
+    launchStage: "live",
+    capabilities: connectors.wrike.capabilities(),
+    authModes: ["api_key", "none"],
+    description: "Client-folder task context for agency actions, blocked work, and delivery movement.",
   },
   {
     key: "google_search_console",
@@ -270,6 +283,73 @@ export function getConnector(platformKey: PlatformKey): PlatformConnector {
   return connectors[platformKey];
 }
 
+function paidMediaSourceFromSnapshot(snapshot: NormalizedBusinessSnapshot) {
+  if (!snapshot.paidMedia) {
+    return null;
+  }
+  const platformKey =
+    snapshot.sourceEvidence.find((item) => item.platformType === "paid_media")?.platformKey ??
+    snapshot.sourceEvidence[0]?.platformKey ??
+    "meta_ads";
+  return {
+    ...snapshot.paidMedia,
+    platformKey,
+    platformLabel: labelForPlatform(platformKey),
+  };
+}
+
+function mergePaidMediaSources(
+  snapshots: NormalizedBusinessSnapshot[],
+): NormalizedBusinessSnapshot["paidMediaSources"] {
+  return snapshots.flatMap((snapshot) => {
+    if ((snapshot.paidMediaSources ?? []).length > 0) {
+      return snapshot.paidMediaSources;
+    }
+    const source = paidMediaSourceFromSnapshot(snapshot);
+    return source ? [source] : [];
+  });
+}
+
+function aggregatePaidMedia(
+  sources: NormalizedBusinessSnapshot["paidMediaSources"],
+): NormalizedBusinessSnapshot["paidMedia"] {
+  if (sources.length === 0) {
+    return null;
+  }
+  const spend = sources.reduce((total, source) => total + source.spend, 0);
+  const impressions = sources.reduce((total, source) => total + source.impressions, 0);
+  const reach = sources.reduce((total, source) => total + source.reach, 0);
+  const clicks = sources.reduce((total, source) => total + source.clicks, 0);
+  const purchases = sources.reduce((total, source) => total + source.purchases, 0);
+  const purchaseValue = sources.reduce((total, source) => total + source.purchaseValue, 0);
+  const topCampaigns = sources
+    .flatMap((source) =>
+      source.topCampaigns.map((campaign) => ({
+        ...campaign,
+        name: `${source.platformLabel}: ${campaign.name}`,
+      })),
+    )
+    .sort((left, right) => right.spend - left.spend)
+    .slice(0, 10);
+
+  return {
+    supportState: "supported",
+    adAccountId: sources.map((source) => source.adAccountId).filter(Boolean).join(", ") || null,
+    accountCurrency: sources.find((source) => source.accountCurrency)?.accountCurrency ?? null,
+    spend,
+    impressions,
+    reach,
+    clicks,
+    ctr: impressions > 0 ? clicks / impressions : null,
+    cpc: clicks > 0 ? spend / clicks : null,
+    cpm: impressions > 0 ? (spend / impressions) * 1000 : null,
+    purchases,
+    purchaseValue,
+    roas: spend > 0 ? purchaseValue / spend : null,
+    topCampaigns,
+  };
+}
+
 export function mergeSnapshots(
   client: ClientRecord,
   snapshots: NormalizedBusinessSnapshot[],
@@ -296,6 +376,8 @@ export function mergeSnapshots(
     }
   }
 
+  const paidMediaSources = mergePaidMediaSources(snapshots);
+
   return {
     clientId: client.id,
     clientName: client.name,
@@ -310,7 +392,8 @@ export function mergeSnapshots(
       primaryDomain: client.primaryDomain ?? null,
     },
     campaigns: snapshots.find((snapshot) => snapshot.campaigns)?.campaigns ?? null,
-    paidMedia: snapshots.find((snapshot) => snapshot.paidMedia)?.paidMedia ?? null,
+    paidMedia: aggregatePaidMedia(paidMediaSources),
+    paidMediaSources,
     automations: snapshots.find((snapshot) => snapshot.automations)?.automations ?? null,
     audiences: snapshots.map((snapshot) => snapshot.audiences).filter(Boolean).reduce((acc, item) => {
       if (!item) return acc;
@@ -365,6 +448,7 @@ export function mergeSnapshots(
       };
     }, null as NormalizedBusinessSnapshot["templatesAssets"]) ?? null,
     crm: snapshots.find((snapshot) => snapshot.crm)?.crm ?? null,
+    taskManagement: snapshots.find((snapshot) => snapshot.taskManagement)?.taskManagement ?? null,
     commerce: snapshots.find((snapshot) => snapshot.commerce)?.commerce ?? null,
     search: snapshots.find((snapshot) => snapshot.search)?.search ?? null,
     localPresence: snapshots.find((snapshot) => snapshot.localPresence)?.localPresence ?? null,

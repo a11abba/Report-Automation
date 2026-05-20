@@ -100,6 +100,53 @@ function dedupeExcludedIntegrations(
   });
 }
 
+function buildIntegrationCoverage(
+  allIntegrations: IntegrationRecord[],
+  includedIntegrations: IntegrationRecord[],
+  excludedIntegrations: NonNullable<AuditScope["excludedIntegrations"]>,
+  runtimeExcludedIntegrations: NonNullable<AuditScope["excludedIntegrations"]>,
+): AuditReportPayload["execution"]["coverage"] {
+  const includedIds = new Set(includedIntegrations.map((integration) => integration.id));
+  const runtimeExcludedById = new Map(
+    runtimeExcludedIntegrations.map((integration) => [integration.id, integration]),
+  );
+  const excludedById = new Map(
+    excludedIntegrations.map((integration) => [integration.id, integration]),
+  );
+
+  return allIntegrations.map((integration) => {
+    if (includedIds.has(integration.id)) {
+      return {
+        id: integration.id,
+        label: integration.displayName,
+        platformKey: integration.platformKey,
+        status: "included" as const,
+        reason: null,
+      };
+    }
+
+    const runtimeExcluded = runtimeExcludedById.get(integration.id);
+    if (runtimeExcluded) {
+      return {
+        id: integration.id,
+        label: integration.displayName,
+        platformKey: integration.platformKey,
+        status: "skipped" as const,
+        reason: runtimeExcluded.reason,
+      };
+    }
+
+    const excluded = excludedById.get(integration.id);
+    return {
+      id: integration.id,
+      label: integration.displayName,
+      platformKey: integration.platformKey,
+      status: "not_live_ready" as const,
+      reason: excluded?.reason ?? "Integration was not live-ready for this audit run.",
+    };
+  });
+}
+
 async function getIntegrationExecutionState(client: ClientRecord, integration: IntegrationRecord) {
   try {
     const executableIntegration = await prepareIntegrationForExecution(integration);
@@ -575,6 +622,12 @@ export async function runAudit(auditId: string) {
           platformKey: integration.platformKey,
         })),
         excludedIntegrations: effectiveExcludedIntegrations,
+        coverage: buildIntegrationCoverage(
+          allIntegrations,
+          effectiveIntegrations,
+          effectiveExcludedIntegrations,
+          runtimeExcludedIntegrations,
+        ),
       },
       reportPeriod: reportPeriodBundle.reportPeriod,
       baselineReport: reportPeriodBundle.baselineReport,
@@ -999,16 +1052,29 @@ export async function deleteContextEntryRecord(id: string) {
   return store.deleteContextEntry(id);
 }
 
-export async function generateReportPeriod(reportPeriodId: string) {
+export async function generateReportPeriod(reportPeriodId: string, visitedPeriodIds = new Set<string>()) {
   const store = await getStore();
   const reportPeriod = await store.getReportPeriod(reportPeriodId);
   if (!reportPeriod) {
     throw new Error("Report period not found.");
   }
+  if (visitedPeriodIds.has(reportPeriodId)) {
+    throw new Error("Circular comparison month chain detected.");
+  }
+  visitedPeriodIds.add(reportPeriodId);
   await store.updateReportPeriod(reportPeriodId, {
     status: "queued",
   });
   try {
+    if (reportPeriod.baselinePeriodId) {
+      const baselinePeriod = await store.getReportPeriod(reportPeriod.baselinePeriodId);
+      const baselineReport = baselinePeriod?.auditId
+        ? await store.getReport(baselinePeriod.auditId)
+        : null;
+      if (baselinePeriod && !baselineReport && baselinePeriod.status !== "running") {
+        await generateReportPeriod(baselinePeriod.id, visitedPeriodIds);
+      }
+    }
     const audit = await createAuditForClient(reportPeriod.clientId, {
       reportPeriodId: reportPeriod.id,
       baselinePeriodId: reportPeriod.baselinePeriodId ?? undefined,

@@ -17,6 +17,7 @@ interface ContextEntryView {
     | "tracking_issue"
     | "sales_issue"
     | "seo_change"
+    | "task_update"
     | "other";
   text: string;
   tags: string[];
@@ -83,6 +84,13 @@ const contextEntryTemplates: readonly ContextTemplate[] = [
     description: "Use this when listings, categories, pages, content, or technical SEO changed.",
     placeholder: "Example: The GBP categories were updated and two location pages were refreshed mid-month.",
     tags: ["guided-checklist", "seo"],
+  },
+  {
+    entryType: "task_update",
+    label: "Task work from agency",
+    description: "Use this when Wrike or another task system explains what the agency worked on.",
+    placeholder: "Example: The team completed tracking QA and is still waiting on client approval for the landing page copy.",
+    tags: ["guided-checklist", "tasks"],
   },
   {
     entryType: "other",

@@ -18,6 +18,7 @@ const createContextEntrySchema = z.object({
     "tracking_issue",
     "sales_issue",
     "seo_change",
+    "task_update",
     "other",
   ]),
   text: z.string().min(6),

@@ -31,6 +31,7 @@ interface LegacyStoreShape {
 }
 
 function hydrateReport(report: AuditReportPayload): AuditReportPayload {
+  const framework = report.framework;
   return {
     ...report,
     locale: report.locale ?? "pt-BR",
@@ -39,7 +40,17 @@ function hydrateReport(report: AuditReportPayload): AuditReportPayload {
     execution: report.execution ?? {
       includedIntegrations: [],
       excludedIntegrations: [],
+      coverage: [],
     },
+    ...(report.execution
+      ? {
+          execution: {
+            includedIntegrations: report.execution.includedIntegrations ?? [],
+            excludedIntegrations: report.execution.excludedIntegrations ?? [],
+            coverage: report.execution.coverage ?? [],
+          },
+        }
+      : {}),
     reportPeriod: report.reportPeriod ?? {
       id: null,
       periodKey: null,
@@ -54,12 +65,27 @@ function hydrateReport(report: AuditReportPayload): AuditReportPayload {
     hypotheses: report.hypotheses ?? [],
     recommendations: report.recommendations ?? [],
     confidenceNotes: report.confidenceNotes ?? [],
-    framework: report.framework ?? {
-      executiveSummary: "",
-      whatHappened: report.dataFacts ?? [],
-      whyItHappened: report.hypotheses ?? [],
-      whatWeAreDoing: report.recommendations ?? [],
-      ccipaPillars: [],
+    framework: {
+      executiveSummary: framework?.executiveSummary ?? "",
+      clientEmailDraft: framework?.clientEmailDraft ?? "",
+      whatHappened: framework?.whatHappened ?? report.dataFacts ?? [],
+      whyItHappened: framework?.whyItHappened ?? report.hypotheses ?? [],
+      whatWeAreDoing: framework?.whatWeAreDoing ?? report.recommendations ?? [],
+      ccipaPillars: framework?.ccipaPillars ?? [],
+    },
+    snapshot: {
+      ...report.snapshot,
+      paidMediaSources:
+        report.snapshot.paidMediaSources ??
+        (report.snapshot.paidMedia
+          ? [
+              {
+                ...report.snapshot.paidMedia,
+                platformKey: "meta_ads",
+                platformLabel: "Paid media",
+              },
+            ]
+          : []),
     },
     findings: (report.findings ?? []).map((finding) => ({
       ...finding,

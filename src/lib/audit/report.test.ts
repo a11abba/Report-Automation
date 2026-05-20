@@ -83,6 +83,13 @@ describe("report rendering", () => {
           platformKey: integration.platformKey,
         })),
         excludedIntegrations: [],
+        coverage: integrations.map((integration) => ({
+          id: integration.id,
+          label: integration.displayName,
+          platformKey: integration.platformKey,
+          status: "included",
+          reason: null,
+        })),
       },
     });
     const html = renderReportHtml(report);
@@ -125,6 +132,13 @@ describe("report rendering", () => {
           platformKey: integration.platformKey,
         })),
         excludedIntegrations: [],
+        coverage: integrations.map((integration) => ({
+          id: integration.id,
+          label: integration.displayName,
+          platformKey: integration.platformKey,
+          status: "included",
+          reason: null,
+        })),
       },
     });
     const html = renderReportHtml(report);

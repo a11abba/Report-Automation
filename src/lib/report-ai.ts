@@ -24,6 +24,7 @@ const frameworkPillarSchema = z.object({
 
 const reportFrameworkSchema = z.object({
   executiveSummary: z.string().min(24),
+  clientEmailDraft: z.string().min(48),
   whatHappened: z.array(frameworkItemSchema).min(1).max(3),
   whyItHappened: z.array(frameworkItemSchema).min(1).max(3),
   whatWeAreDoing: z.array(frameworkItemSchema).min(1).max(3),
@@ -156,6 +157,7 @@ function buildReportBrief(
         platformKey: integration.platformKey,
       })),
       excludedIntegrations: report.execution.excludedIntegrations,
+      integrationCoverage: report.execution.coverage,
     },
     businessInputs: report.reportPeriod.manualInputs,
     traffic: report.snapshot.trafficAttribution
@@ -171,6 +173,17 @@ function buildReportBrief(
       ? {
           objective: objective.kind,
           primaryConversionLabel: objective.primaryConversionLabel,
+          sources: report.snapshot.paidMediaSources.map((source) => ({
+            platformKey: source.platformKey,
+            platformLabel: source.platformLabel,
+            spend: source.spend,
+            conversions: source.purchases,
+            costPerConversion: costPerConversion(source),
+            roas: source.roas,
+            clicks: source.clicks,
+            impressions: source.impressions,
+            ctr: source.ctr,
+          })),
           spend: report.snapshot.paidMedia.spend,
           conversions: report.snapshot.paidMedia.purchases,
           costPerConversion: costPerConversion(report.snapshot.paidMedia),
@@ -186,6 +199,23 @@ function buildReportBrief(
             roas: campaign.roas,
             ctr: campaign.ctr,
           })),
+        }
+      : null,
+    taskManagement: report.snapshot.taskManagement
+      ? {
+          provider: report.snapshot.taskManagement.provider,
+          folderId: report.snapshot.taskManagement.folderId,
+          folderName: report.snapshot.taskManagement.folderName,
+          totalTasks: report.snapshot.taskManagement.totalTasks,
+          activeTasks: report.snapshot.taskManagement.activeTasks,
+          completedTasks: report.snapshot.taskManagement.completedTasks,
+          overdueTasks: report.snapshot.taskManagement.overdueTasks,
+          highImportanceTasks: report.snapshot.taskManagement.highImportanceTasks,
+          recentlyUpdatedTasks: report.snapshot.taskManagement.recentlyUpdatedTasks.slice(0, 6),
+          actionedTasks: (report.snapshot.taskManagement.actionedTasks ?? []).slice(0, 8),
+          completedTasksInPeriod: (report.snapshot.taskManagement.completedTasksInPeriod ?? []).slice(0, 6),
+          activeTasksTouchedInPeriod: (report.snapshot.taskManagement.activeTasksTouchedInPeriod ?? []).slice(0, 6),
+          overdueOrBlockedTasks: (report.snapshot.taskManagement.overdueOrBlockedTasks ?? []).slice(0, 6),
         }
       : null,
     search: report.snapshot.search
@@ -268,6 +298,7 @@ const responseFormat = {
     additionalProperties: false,
     required: [
       "executiveSummary",
+      "clientEmailDraft",
       "whatHappened",
       "whyItHappened",
       "whatWeAreDoing",
@@ -275,6 +306,7 @@ const responseFormat = {
     ],
     properties: {
       executiveSummary: { type: "string" },
+      clientEmailDraft: { type: "string" },
       whatHappened: {
         type: "array",
         items: {
@@ -422,9 +454,14 @@ function buildInstructions(locale: AuditReportPayload["locale"]) {
   if (locale === "en") {
     return [
       "You are a senior performance strategist writing a client-facing monthly report.",
+      "The agency must sound human, accountable, and specific. Write from a clear agency point of view without sounding defensive or robotic.",
+      "Also produce a concise email draft the agency can send to the client, reusing the report's key result, explanation, and next action.",
       "Use the CCIPA framework internally to evaluate the narrative quality, but do not mention CCIPA in the output.",
       "Your output must answer three questions in order: what happened, why it happened, and what we are doing about it.",
       "Use the operator context as a priority source when explaining causality.",
+      "If task-management context is provided, use it to connect recommendations to real agency follow-through, but do not expose internal task IDs unless they are useful client-visible references.",
+      "Only treat live-ready integrations as performance evidence. Mention unavailable integrations only as data coverage limitations.",
+      "Prioritize tasks touched during the report month over older task history when explaining what changed.",
       "Treat paid-media conversion metrics as the business's primary tracked conversions. Do not assume they are ecommerce purchases unless the brief explicitly confirms ecommerce.",
       "If the client is lead-generation focused, speak in terms of leads and cost per lead. Do not use ROAS as the headline performance lens unless the business is actually revenue-driven.",
       "Use internal notes as background guidance, but never quote them verbatim to the client unless they are already client-facing statements.",
@@ -442,9 +479,14 @@ function buildInstructions(locale: AuditReportPayload["locale"]) {
 
   return [
     "Você é um estrategista sênior de performance escrevendo um relatório mensal voltado ao cliente.",
+    "A agência precisa soar humana, responsável e específica. Escreva com uma posição clara da agência, sem parecer defensivo ou robótico.",
+    "Também gere um rascunho conciso de email que a agência possa enviar ao cliente, reutilizando o principal resultado, a explicação e o próximo passo do relatório.",
     "Use o framework CCIPA internamente para avaliar a qualidade da narrativa, mas não mencione CCIPA no texto final.",
     "A resposta deve seguir a ordem: o que aconteceu, por que aconteceu e o que estamos fazendo sobre isso.",
     "Use o contexto informado pelo operador como fonte prioritária para explicar causalidade.",
+    "Se houver contexto de gestão de tarefas, use-o para conectar recomendações ao acompanhamento real da agência, mas não exponha IDs internos de tarefas a menos que sejam referências úteis para o cliente.",
+    "Trate apenas integrações live-ready como evidência de performance. Mencione integrações indisponíveis somente como limitação de cobertura de dados.",
+    "Priorize tarefas movimentadas durante o mês do relatório em vez de histórico antigo de tarefas ao explicar o que mudou.",
     "Trate os dados de conversão de mídia paga como a conversão principal acompanhada pelo negócio. Não assuma que são compras de ecommerce, a menos que o briefing confirme isso explicitamente.",
     "Se o cliente for focado em geração de leads, fale em leads e custo por lead. Não use ROAS como eixo principal da leitura, exceto quando o negócio realmente for orientado a receita.",
     "Use notas internas apenas como briefing de apoio e nunca as copie literalmente para o cliente, exceto quando já forem textos claramente client-facing.",
@@ -482,6 +524,7 @@ function normalizeFrameworkPayload(payload: unknown) {
 
   return {
     ...next,
+    clientEmailDraft: typeof next.clientEmailDraft === "string" ? next.clientEmailDraft : "",
     whatHappened: normalizeItems(next.whatHappened),
     whyItHappened: normalizeItems(next.whyItHappened),
     whatWeAreDoing: normalizeItems(next.whatWeAreDoing),
@@ -521,6 +564,7 @@ export async function enhanceReportWithAi(
   ) as ParsedFramework;
   const framework: ReportFrameworkSections = {
     executiveSummary: parsed.executiveSummary,
+    clientEmailDraft: parsed.clientEmailDraft,
     whatHappened: parsed.whatHappened,
     whyItHappened: parsed.whyItHappened,
     whatWeAreDoing: parsed.whatWeAreDoing,

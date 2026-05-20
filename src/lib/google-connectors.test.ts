@@ -234,6 +234,7 @@ describe("google ads connector", () => {
     process.env.GOOGLE_ADS_DEVELOPER_TOKEN = "developer-token";
 
     const connector = getConnector("google_ads");
+    expect(connector.healthCheck).toBeDefined();
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -248,7 +249,7 @@ describe("google ads connector", () => {
       ),
     );
 
-    const result = await connector.healthCheck(
+    const result = await connector.healthCheck!(
       integration({
         platformKey: "google_ads",
         platformType: "paid_media",

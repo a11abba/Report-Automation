@@ -80,6 +80,7 @@ export async function POST(request: Request) {
     }
 
     const body = createClientSchema.parse(bodyInput);
+    const warnings: string[] = [];
     const primaryDomain = body.primaryDomain
       ? await assertSafeAuditUrl(body.primaryDomain)
       : null;
@@ -100,18 +101,26 @@ export async function POST(request: Request) {
       await attachReportMemoryRecordToClient(client.id, body.initialReportMemoryId);
     }
     if (latestReferenceReportPdf) {
-      const importedReport = await extractTextFromPdfFile(latestReferenceReportPdf);
-      const reportMemory = await createReportMemoryRecord(accountId, {
-        title: importedReport.title,
-        sourceClientName: body.name,
-        periodLabel: "Latest pre-platform PDF reference",
-        notes:
-          "Imported automatically during client creation from the uploaded latest PDF report.",
-        content: importedReport.content,
-      });
-      await attachReportMemoryRecordToClient(client.id, reportMemory.id);
+      try {
+        const importedReport = await extractTextFromPdfFile(latestReferenceReportPdf);
+        const reportMemory = await createReportMemoryRecord(accountId, {
+          title: importedReport.title,
+          sourceClientName: body.name,
+          periodLabel: "Latest pre-platform PDF reference",
+          notes:
+            "Imported automatically during client creation from the uploaded latest PDF report.",
+          content: importedReport.content,
+        });
+        await attachReportMemoryRecordToClient(client.id, reportMemory.id);
+      } catch (error) {
+        warnings.push(
+          error instanceof Error
+            ? `the uploaded PDF could not be converted into reusable report text: ${error.message}`
+            : "the uploaded PDF could not be converted into reusable report text.",
+        );
+      }
     }
-    return NextResponse.json({ client }, { status: 201 });
+    return NextResponse.json({ client, warnings }, { status: 201 });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Invalid request." },

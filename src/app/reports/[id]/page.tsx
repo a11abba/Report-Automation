@@ -15,6 +15,7 @@ import type {
   ReportConfidenceNote,
   ReportNarrativeItem,
   ReportPeriodRecord,
+  TaskManagementItemSnapshot,
 } from "@/lib/audit/types";
 
 interface ReportPageProps {
@@ -125,6 +126,23 @@ function buildFrameworkFallback(report: AuditReportPayload | null) {
       report.hypotheses[0]?.detail ||
       report.recommendations[0]?.detail ||
       "Healthy baseline.",
+    clientEmailDraft:
+      report.framework.clientEmailDraft ||
+      [
+        report.locale === "en"
+          ? `Subject: ${report.reportPeriod.periodKey ?? "Monthly"} performance update`
+          : `Assunto: Atualização de performance de ${report.reportPeriod.periodKey ?? "este mês"}`,
+        report.locale === "en"
+          ? `We reviewed the report and wanted to share the main read: ${report.framework.executiveSummary || report.dataFacts[0]?.detail || "the month is ready for review."}`
+          : `Revisamos o relatório e queríamos compartilhar a principal leitura: ${report.framework.executiveSummary || report.dataFacts[0]?.detail || "o mês está pronto para revisão."}`,
+        report.framework.whatWeAreDoing[0]?.detail
+          ? report.locale === "en"
+            ? `Our next step is: ${report.framework.whatWeAreDoing[0].detail}`
+            : `Nosso próximo passo é: ${report.framework.whatWeAreDoing[0].detail}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
     whatHappened: report.framework.whatHappened.length
       ? report.framework.whatHappened
       : report.dataFacts.slice(0, 3),
@@ -186,6 +204,38 @@ function statusTone(status: ReportPeriodRecord["status"]) {
     default:
       return "border-white/10 bg-white/[0.04] text-slate-300";
   }
+}
+
+function coverageTone(status: AuditReportPayload["execution"]["coverage"][number]["status"]) {
+  switch (status) {
+    case "included":
+      return "border-emerald-500/20 bg-emerald-500/10 text-emerald-100";
+    case "skipped":
+      return "border-rose-500/20 bg-rose-500/10 text-rose-100";
+    default:
+      return "border-amber-500/20 bg-amber-500/10 text-amber-100";
+  }
+}
+
+function coverageLabel(status: AuditReportPayload["execution"]["coverage"][number]["status"]) {
+  switch (status) {
+    case "included":
+      return "Live-ready included";
+    case "skipped":
+      return "Skipped during run";
+    default:
+      return "Not live-ready";
+  }
+}
+
+function taskDateLabel(task: TaskManagementItemSnapshot, locale: string) {
+  if (!task.updatedAt && !task.dueDate) {
+    return "No date";
+  }
+  if (task.updatedAt) {
+    return `Updated ${formatDateTime(task.updatedAt, locale)}`;
+  }
+  return `Due ${formatDate(task.dueDate, locale)}`;
 }
 
 interface ChartDatum {
@@ -286,6 +336,133 @@ function MiniBarChart({
           })}
         </div>
       )}
+    </section>
+  );
+}
+
+function IntegrationCoverageSection({
+  coverage,
+}: {
+  coverage: AuditReportPayload["execution"]["coverage"];
+}) {
+  return (
+    <section className="rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-white">Integration coverage</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-400">
+            Only live-ready integrations are used as performance evidence in this report.
+          </p>
+        </div>
+        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-400">
+          {coverage.length} checked
+        </span>
+      </div>
+      {coverage.length === 0 ? (
+        <p className="mt-4 text-sm text-slate-400">
+          No integration coverage details were stored with this report.
+        </p>
+      ) : (
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {coverage.map((item) => (
+            <article
+              key={item.id}
+              className={`rounded-[1.25rem] border p-4 ${coverageTone(item.status)}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold">{item.label}</p>
+                  <p className="mt-1 text-xs uppercase tracking-[0.16em] opacity-75">
+                    {item.platformKey.replaceAll("_", " ")}
+                  </p>
+                </div>
+                <span className="rounded-full border border-current/20 px-2 py-1 text-[10px] uppercase tracking-[0.16em]">
+                  {coverageLabel(item.status)}
+                </span>
+              </div>
+              {item.reason ? (
+                <p className="mt-3 text-sm leading-6 opacity-90">{item.reason}</p>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function TaskList({
+  title,
+  tasks,
+  locale,
+}: {
+  title: string;
+  tasks: TaskManagementItemSnapshot[];
+  locale: string;
+}) {
+  return (
+    <div className="rounded-[1.25rem] border border-white/10 bg-[#0d1520] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-white">{title}</p>
+        <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[10px] uppercase tracking-[0.16em] text-slate-400">
+          {tasks.length}
+        </span>
+      </div>
+      {tasks.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-500">No matching tasks for this report month.</p>
+      ) : (
+        <div className="mt-3 grid gap-2">
+          {tasks.slice(0, 6).map((task) => (
+            <article
+              key={`${task.id}-${task.updatedAt ?? task.dueDate ?? task.title}`}
+              className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2"
+            >
+              <p className="text-sm font-medium text-slate-200">{task.title}</p>
+              <p className="mt-1 text-xs uppercase tracking-[0.14em] text-slate-500">
+                {task.status} · {taskDateLabel(task, locale)}
+              </p>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskActionsSection({
+  taskManagement,
+  locale,
+}: {
+  taskManagement: AuditReportPayload["snapshot"]["taskManagement"];
+  locale: string;
+}) {
+  if (!taskManagement) {
+    return null;
+  }
+
+  const actionedTasks = taskManagement.actionedTasks ?? [];
+  const completedTasks = taskManagement.completedTasksInPeriod ?? [];
+  const activeTouchedTasks = taskManagement.activeTasksTouchedInPeriod ?? [];
+  const overdueOrBlockedTasks = taskManagement.overdueOrBlockedTasks ?? [];
+
+  return (
+    <section className="rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-white">Actions performed this month</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-400">
+            {taskManagement.provider} context from {taskManagement.folderName ?? taskManagement.folderId ?? "the client workspace"}.
+          </p>
+        </div>
+        <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-400">
+          {actionedTasks.length} touched
+        </span>
+      </div>
+      <div className="mt-4 grid gap-3 xl:grid-cols-3">
+        <TaskList title="Completed in period" tasks={completedTasks} locale={locale} />
+        <TaskList title="Active touched in period" tasks={activeTouchedTasks} locale={locale} />
+        <TaskList title="Overdue or blocked" tasks={overdueOrBlockedTasks} locale={locale} />
+      </div>
     </section>
   );
 }
@@ -580,6 +757,19 @@ export default async function ReportPage({ params }: ReportPageProps) {
               </div>
             </section>
 
+            <div className="mt-6">
+              <IntegrationCoverageSection coverage={report.execution.coverage ?? []} />
+            </div>
+
+            {report.snapshot.taskManagement ? (
+              <div className="mt-6">
+                <TaskActionsSection
+                  taskManagement={report.snapshot.taskManagement}
+                  locale={locale}
+                />
+              </div>
+            ) : null}
+
             {report && objective?.kind === "lead_generation" ? (
               <section className="mt-6 rounded-[1.5rem] border border-[#8f7a2f]/30 bg-[#161a16] p-5">
                 <h2 className="text-lg font-semibold text-white">Lead generation lens</h2>
@@ -611,6 +801,42 @@ export default async function ReportPage({ params }: ReportPageProps) {
               </section>
             ) : null}
 
+            {report.snapshot.paidMediaSources.length > 1 ? (
+              <section className="mt-6 rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Paid media by source</h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-400">
+                      Rollup metrics are aggregated, while each live-ready ad platform remains visible by source.
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-slate-400">
+                    {report.snapshot.paidMediaSources.length} sources
+                  </span>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {report.snapshot.paidMediaSources.map((source) => (
+                    <article
+                      key={`${source.platformKey}-${source.adAccountId ?? source.platformLabel}`}
+                      className="rounded-[1.25rem] border border-white/10 bg-[#0d1520] p-4"
+                    >
+                      <p className="text-sm font-semibold text-white">{source.platformLabel}</p>
+                      <div className="mt-3 grid gap-2 text-sm text-slate-300">
+                        <span>Spend: {formatNumber(source.spend, locale, 2)}</span>
+                        <span>Clicks: {formatNumber(source.clicks, locale)}</span>
+                        <span>Conversions: {formatNumber(source.purchases, locale)}</span>
+                        <span>
+                          {objective?.kind === "lead_generation"
+                            ? `CPL: ${formatNumber(costPerConversion(source), locale, 2)}`
+                            : `ROAS: ${source.roas == null ? "N/A" : formatNumber(source.roas, locale, 2)}`}
+                        </span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
             <section className="mt-6 grid gap-4 xl:grid-cols-3">
               <NarrativeSection
                 title="Key outcomes"
@@ -628,6 +854,25 @@ export default async function ReportPage({ params }: ReportPageProps) {
                 emptyMessage="No next-step plan was generated yet."
               />
             </section>
+
+            {framework?.clientEmailDraft ? (
+              <section className="mt-6 rounded-[1.5rem] border border-white/10 bg-[#111925] p-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.22em] text-slate-500">
+                      Client-ready follow-up
+                    </p>
+                    <h2 className="mt-2 text-lg font-semibold text-white">Client email draft</h2>
+                  </div>
+                  <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-emerald-100">
+                    Human agency POV
+                  </span>
+                </div>
+                <pre className="mt-4 whitespace-pre-wrap rounded-[1.25rem] border border-white/10 bg-[#0d1520] p-4 font-sans text-sm leading-6 text-slate-300">
+                  {framework.clientEmailDraft}
+                </pre>
+              </section>
+            ) : null}
 
             <section className="mt-6 grid gap-4 xl:grid-cols-2">
               <MiniBarChart

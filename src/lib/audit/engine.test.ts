@@ -102,6 +102,22 @@ describe("multi-platform audit domain", () => {
           { id: "int_5", label: "website_crawler", platformKey: "website_crawler" },
         ],
         excludedIntegrations: [],
+        coverage: [
+          {
+            id: "int_4",
+            label: "google_search_console",
+            platformKey: "google_search_console",
+            status: "included",
+            reason: null,
+          },
+          {
+            id: "int_5",
+            label: "website_crawler",
+            platformKey: "website_crawler",
+            status: "included",
+            reason: null,
+          },
+        ],
       },
     });
 
@@ -109,5 +125,48 @@ describe("multi-platform audit domain", () => {
     expect(report.summary.locationCount).toBeGreaterThanOrEqual(0);
     expect(report.sectionScores.some((section) => section.id === "seo_visibility")).toBe(true);
     expect(report.locale).toBe("pt-BR");
+  });
+
+  it("keeps live paid media sources separate while aggregating the rollup", async () => {
+    const googleAds = getConnector("google_ads");
+    const metaAds = getConnector("meta_ads");
+
+    const [googleSnapshot, metaSnapshot] = await Promise.all([
+      googleAds.fetchSnapshot({
+        client,
+        integration: integration("int_google_ads", "google_ads", "paid_media"),
+        requestedCapabilities: googleAds.capabilities(),
+      }),
+      metaAds.fetchSnapshot({
+        client,
+        integration: integration("int_meta_ads", "meta_ads", "paid_media"),
+        requestedCapabilities: metaAds.capabilities(),
+      }),
+    ]);
+
+    const merged = mergeSnapshots(client, [googleSnapshot, metaSnapshot]);
+
+    expect(merged.paidMediaSources).toHaveLength(2);
+    expect(merged.paidMedia?.spend).toBe(
+      merged.paidMediaSources.reduce((total, source) => total + source.spend, 0),
+    );
+    expect(merged.paidMedia?.topCampaigns[0]?.name).toMatch(/Google Ads|Meta Ads/);
+  });
+
+  it("tracks task actions inside the report period", async () => {
+    const wrike = getConnector("wrike");
+    const snapshot = await wrike.fetchSnapshot({
+      client,
+      integration: integration("int_wrike", "wrike", "task_management"),
+      requestedCapabilities: wrike.capabilities(),
+      dateRange: {
+        startDate: "2026-04-01",
+        endDate: "2026-04-30",
+      },
+    });
+
+    expect(snapshot.taskManagement?.actionedTasks.length).toBeGreaterThan(0);
+    expect(snapshot.taskManagement?.completedTasksInPeriod.length).toBeGreaterThan(0);
+    expect(snapshot.taskManagement?.activeTasksTouchedInPeriod.length).toBeGreaterThan(0);
   });
 });

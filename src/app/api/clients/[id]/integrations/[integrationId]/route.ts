@@ -23,6 +23,8 @@ const updateIntegrationSchema = z.object({
   microsoftAccountId: z.string().nullable().optional(),
   merchantStoreId: z.string().nullable().optional(),
   merchantFeedId: z.string().nullable().optional(),
+  taskFolderId: z.string().nullable().optional(),
+  taskFolderName: z.string().nullable().optional(),
   serviceAccountEmail: z.string().nullable().optional(),
 });
 
@@ -66,6 +68,8 @@ export async function PATCH(
     if (body.microsoftAccountId !== undefined) settingsPatch.microsoftAccountId = body.microsoftAccountId;
     if (body.merchantStoreId !== undefined) settingsPatch.merchantStoreId = body.merchantStoreId;
     if (body.merchantFeedId !== undefined) settingsPatch.merchantFeedId = body.merchantFeedId;
+    if (body.taskFolderId !== undefined) settingsPatch.taskFolderId = body.taskFolderId;
+    if (body.taskFolderName !== undefined) settingsPatch.taskFolderName = body.taskFolderName;
     const credentialsPatch: NonNullable<
       Parameters<typeof updateIntegrationRecord>[1]["credentials"]
     > = {};

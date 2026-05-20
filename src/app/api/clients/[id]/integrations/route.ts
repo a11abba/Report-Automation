@@ -9,7 +9,13 @@ const integrationSchema = z.object({
   platformKey: z.enum([
     "klaviyo",
     "hubspot",
+    "pipedrive",
+    "salesforce",
     "shopify",
+    "square",
+    "lightspeed",
+    "clover",
+    "wrike",
     "google_search_console",
     "google_business_profile",
     "google_analytics",
@@ -39,6 +45,8 @@ const integrationSchema = z.object({
   microsoftAccountId: z.string().nullable().optional(),
   merchantStoreId: z.string().nullable().optional(),
   merchantFeedId: z.string().nullable().optional(),
+  taskFolderId: z.string().nullable().optional(),
+  taskFolderName: z.string().nullable().optional(),
   serviceAccountEmail: z.string().nullable().optional(),
 });
 
@@ -90,6 +98,8 @@ export async function POST(
         microsoftAccountId: body.microsoftAccountId ?? undefined,
         merchantStoreId: body.merchantStoreId ?? undefined,
         merchantFeedId: body.merchantFeedId ?? undefined,
+        taskFolderId: body.taskFolderId ?? undefined,
+        taskFolderName: body.taskFolderName ?? undefined,
       },
     });
 

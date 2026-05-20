@@ -163,6 +163,8 @@ interface DashboardData {
         microsoftAccountId?: string | null;
         merchantStoreId?: string | null;
         merchantFeedId?: string | null;
+        taskFolderId?: string | null;
+        taskFolderName?: string | null;
       };
     }>;
     locations: LocationRecord[];
@@ -208,8 +210,13 @@ interface AutoConfigurationPlan {
 }
 
 interface BannerMessage {
-  tone: "success" | "error";
+  tone: "success" | "error" | "warning";
   text: string;
+}
+
+interface ClientCreateResponse {
+  client: unknown;
+  warnings?: string[];
 }
 
 const ignoredMatchTokens = new Set([
@@ -692,9 +699,9 @@ export function DashboardShell({
       : data.reportMemories;
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(243,193,91,0.12),transparent_24%),radial-gradient(circle_at_85%_12%,rgba(53,130,246,0.16),transparent_18%),linear-gradient(180deg,#091019_0%,#0b111a_48%,#0a0f16_100%)] text-slate-100">
-      <div className="grid min-h-screen lg:grid-cols-[284px_minmax(0,1fr)]">
-        <aside className="border-b border-white/10 bg-[linear-gradient(180deg,rgba(20,28,41,0.96)_0%,rgba(16,23,35,0.96)_100%)] px-5 py-6 lg:border-b-0 lg:border-r">
+    <div className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top_left,rgba(243,193,91,0.12),transparent_24%),radial-gradient(circle_at_85%_12%,rgba(53,130,246,0.16),transparent_18%),linear-gradient(180deg,#091019_0%,#0b111a_48%,#0a0f16_100%)] text-slate-100">
+      <div className="grid min-h-screen min-w-0 lg:grid-cols-[284px_minmax(0,1fr)]">
+        <aside className="min-w-0 border-b border-white/10 bg-[linear-gradient(180deg,rgba(20,28,41,0.96)_0%,rgba(16,23,35,0.96)_100%)] px-5 py-6 lg:border-b-0 lg:border-r">
           <div className="flex items-center gap-4">
             <div className="flex h-14 w-14 items-center justify-center rounded-[1.2rem] bg-[linear-gradient(135deg,#f3c15b_0%,#d9a930_100%)] text-lg font-semibold tracking-[-0.04em] text-[#11161f] shadow-[0_20px_40px_rgba(243,193,91,0.24)]">
               OA
@@ -891,7 +898,9 @@ export function DashboardShell({
                     "rounded-[1.25rem] px-4 py-3 text-sm",
                     message.tone === "success"
                       ? "border border-emerald-500/20 bg-emerald-500/10 text-emerald-100"
-                      : "border border-rose-500/20 bg-rose-500/10 text-rose-100",
+                      : message.tone === "warning"
+                        ? "border border-amber-500/20 bg-amber-500/10 text-amber-100"
+                        : "border border-rose-500/20 bg-rose-500/10 text-rose-100",
                   )}
                 >
                   {message.text}
@@ -905,7 +914,7 @@ export function DashboardShell({
             </div>
           </header>
 
-          <main className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          <main className="min-w-0 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
             <section id="overview" className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
               <div className="rounded-[2rem] border border-white/10 bg-[linear-gradient(135deg,#182230_0%,#121a26_58%,#20251f_100%)] p-8 shadow-[0_30px_90px_rgba(0,0,0,0.32)]">
                 <p className="text-xs uppercase tracking-[0.34em] text-[#f3c15b]">
@@ -961,14 +970,23 @@ export function DashboardShell({
                     className="mt-6 flex flex-col gap-3"
                     onSubmit={(event) => {
                       event.preventDefault();
+                      const form = event.currentTarget;
                       const formData = new FormData(event.currentTarget);
                       const requestBody = new FormData(event.currentTarget);
                       const name = String(formData.get("name") ?? "");
                       runTask(
-                        () => postForm("/api/clients", requestBody),
+                        () => postForm<ClientCreateResponse>("/api/clients", requestBody),
                         `Client "${name}" created.`,
+                        (result) => {
+                          if (result.warnings?.length) {
+                            setMessage({
+                              tone: "warning",
+                              text: `Client "${name}" created, but ${result.warnings.join(" ")}`,
+                            });
+                          }
+                          form.reset();
+                        },
                       );
-                      event.currentTarget.reset();
                     }}
                   >
                     <select
@@ -1805,7 +1823,7 @@ export function DashboardShell({
                       </form>
                     </div>
 
-                    <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto]">
+                    <div className="mt-5 grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                       <select
                         form={`integration-${client.id}`}
                         name="platformKey"
@@ -1839,6 +1857,11 @@ export function DashboardShell({
                         name="adAccountId"
                         placeholder="Meta ad account ID"
                       />
+                      <Input
+                        form={`integration-${client.id}`}
+                        name="taskFolderId"
+                        placeholder="Wrike folder ID"
+                      />
                       <button
                         form={`integration-${client.id}`}
                         type="submit"
@@ -1858,6 +1881,7 @@ export function DashboardShell({
                         const apiKey = String(formData.get("apiKey") ?? "");
                         const targetUrl = String(formData.get("targetUrl") ?? "");
                         const adAccountId = String(formData.get("adAccountId") ?? "");
+                        const taskFolderId = String(formData.get("taskFolderId") ?? "");
                         runTask(
                           () =>
                             postJson(`/api/clients/${client.id}/integrations`, {
@@ -1868,6 +1892,8 @@ export function DashboardShell({
                               authOrigin: apiKey.length === 0 ? "none" : "api_key",
                               targetUrl: targetUrl || client.primaryDomain || null,
                               adAccountId: adAccountId || null,
+                              taskFolderId: taskFolderId || null,
+                              taskFolderName: taskFolderId ? client.name : null,
                             }),
                           `Integration added to ${client.name}.`,
                         );
@@ -3096,6 +3122,118 @@ export function DashboardShell({
                                   className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
                                 >
                                   Save Merchant Center IDs
+                                </button>
+                              </form>
+                            ) : null}
+
+                            {integration.platformKey === "wrike" ? (
+                              <form
+                                className="mt-4 grid gap-4"
+                                onSubmit={(event) => {
+                                  event.preventDefault();
+                                  const formData = new FormData(event.currentTarget);
+                                  const taskFolderId = String(formData.get("taskFolderId") ?? "").trim();
+                                  const taskFolderName = String(formData.get("taskFolderName") ?? "").trim();
+                                  const apiKey = String(formData.get("apiKey") ?? "").trim();
+                                  const hasStoredToken =
+                                    integration.credentials.authOrigin === "api_key";
+                                  const hasEnvironmentToken =
+                                    integration.connectionDetails.environmentConfigured;
+                                  const updatePayload: Record<string, unknown> = {
+                                    taskFolderId: taskFolderId || null,
+                                    taskFolderName: taskFolderName || null,
+                                    demoMode: !(
+                                      taskFolderId &&
+                                      (apiKey || hasStoredToken || hasEnvironmentToken)
+                                    ),
+                                  };
+                                  if (apiKey) {
+                                    updatePayload.apiKey = apiKey;
+                                    updatePayload.authOrigin = "api_key";
+                                  }
+                                  runTask(
+                                    () =>
+                                      patchJson(
+                                        `/api/clients/${client.id}/integrations/${integration.id}`,
+                                        updatePayload,
+                                      ),
+                                    `Wrike sync settings updated for ${client.name}.`,
+                                  );
+                                }}
+                              >
+                                <div className="grid gap-3 lg:grid-cols-3">
+                                  <FieldWithHelp
+                                    label="Client folder ID"
+                                    helpTitle="Wrike folder/project source"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Use the Wrike folder or project that represents this client.
+                                          The report uses tasks from that folder as operational context.
+                                        </p>
+                                        <p>
+                                          This pattern is intentionally generic so ClickUp, Asana, or
+                                          Linear can later feed the same task-context layer.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="taskFolderId"
+                                      placeholder="Wrike folder ID"
+                                      defaultValue={integration.settings.taskFolderId ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                  <FieldWithHelp
+                                    label="Wrike token"
+                                    helpTitle="Authentication token"
+                                    helpBody={
+                                      <>
+                                        <p>
+                                          Paste a Wrike permanent access token here when connecting
+                                          this client for the first time or replacing an old token.
+                                        </p>
+                                        <p>
+                                          Saved tokens stay encrypted server-side, so this field is
+                                          intentionally blank after saving.
+                                        </p>
+                                      </>
+                                    }
+                                  >
+                                    <Input
+                                      name="apiKey"
+                                      type="password"
+                                      placeholder={
+                                        integration.credentials.authOrigin === "api_key"
+                                          ? "Token saved; paste only to replace"
+                                          : integration.connectionDetails.environmentConfigured
+                                            ? "Using WRIKE_API_TOKEN from environment"
+                                          : "Wrike permanent access token"
+                                      }
+                                      autoComplete="off"
+                                    />
+                                  </FieldWithHelp>
+                                  <FieldWithHelp
+                                    label="Folder label"
+                                    helpTitle="Client-visible label"
+                                    helpBody={
+                                      <p>
+                                        Optional label used in the analysis instead of showing only the raw folder ID.
+                                      </p>
+                                    }
+                                  >
+                                    <Input
+                                      name="taskFolderName"
+                                      placeholder="Client folder label"
+                                      defaultValue={integration.settings.taskFolderName ?? ""}
+                                    />
+                                  </FieldWithHelp>
+                                </div>
+                                <button
+                                  type="submit"
+                                  className="w-full rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200 lg:w-auto"
+                                >
+                                  Save Wrike sync settings
                                 </button>
                               </form>
                             ) : null}

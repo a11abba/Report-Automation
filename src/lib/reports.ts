@@ -68,6 +68,17 @@ function getClientVisibleConfidenceNotes(report: AuditReportPayload) {
   );
 }
 
+function integrationCoverageLabel(status: AuditReportPayload["execution"]["coverage"][number]["status"]) {
+  if (status === "included") return "Live-ready included";
+  if (status === "skipped") return "Skipped during run";
+  return "Not live-ready";
+}
+
+function formatTaskDate(locale: AuditReportPayload["locale"], value: string | null | undefined) {
+  if (!value) return "N/A";
+  return new Date(value).toLocaleDateString(locale);
+}
+
 function renderBarChartCard({
   title,
   items,
@@ -148,6 +159,19 @@ export function renderReportHtml(report: AuditReportPayload): string {
       report.hypotheses[0]?.detail ||
       report.recommendations[0]?.detail ||
       labels.healthyBaseline,
+    clientEmailDraft:
+      report.framework.clientEmailDraft ||
+      [
+        report.locale === "en"
+          ? `Subject: ${report.reportPeriod.periodKey ?? "Monthly"} performance update`
+          : `Assunto: Atualização de performance de ${report.reportPeriod.periodKey ?? "este mês"}`,
+        report.framework.executiveSummary ||
+          report.dataFacts[0]?.detail ||
+          labels.healthyBaseline,
+        report.framework.whatWeAreDoing[0]?.detail ?? report.recommendations[0]?.detail ?? "",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
     whatHappened: report.framework.whatHappened.length
       ? report.framework.whatHappened
       : report.dataFacts.slice(0, 3),
@@ -253,6 +277,53 @@ export function renderReportHtml(report: AuditReportPayload): string {
       `,
     )
     .join("");
+  const coverageRows = (report.execution.coverage ?? [])
+    .map(
+      (integration) => `
+        <tr>
+          <td>${escapeHtml(integration.label)}</td>
+          <td>${escapeHtml(integration.platformKey.replaceAll("_", " "))}</td>
+          <td>${escapeHtml(integrationCoverageLabel(integration.status))}</td>
+          <td>${escapeHtml(integration.reason ?? "Used as live performance evidence.")}</td>
+        </tr>
+      `,
+    )
+    .join("");
+  const paidSourceRows = (report.snapshot.paidMediaSources ?? [])
+    .map(
+      (source) => `
+        <tr>
+          <td>${escapeHtml(source.platformLabel)}</td>
+          <td>${formatNumber(report.locale, source.spend, 2)}</td>
+          <td>${formatNumber(report.locale, source.clicks)}</td>
+          <td>${formatNumber(report.locale, source.purchases)}</td>
+          <td>${objective.kind === "lead_generation" ? formatNumber(report.locale, costPerConversion(source), 2) : formatNumber(report.locale, source.roas, 2)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+  const taskManagement = report.snapshot.taskManagement;
+  const actionedTasks = taskManagement?.actionedTasks ?? [];
+  const completedTasksInPeriod = taskManagement?.completedTasksInPeriod ?? [];
+  const activeTasksTouchedInPeriod = taskManagement?.activeTasksTouchedInPeriod ?? [];
+  const overdueOrBlockedTasks = taskManagement?.overdueOrBlockedTasks ?? [];
+  const taskRows = [
+    ...completedTasksInPeriod.map((task) => ({ ...task, group: "Completed in period" })),
+    ...activeTasksTouchedInPeriod.map((task) => ({ ...task, group: "Active touched in period" })),
+    ...overdueOrBlockedTasks.map((task) => ({ ...task, group: "Overdue or blocked" })),
+  ]
+    .slice(0, 12)
+    .map(
+      (task) => `
+        <tr>
+          <td>${escapeHtml(task.group)}</td>
+          <td>${escapeHtml(task.title)}</td>
+          <td>${escapeHtml(task.status)}</td>
+          <td>${escapeHtml(formatTaskDate(report.locale, task.updatedAt ?? task.dueDate))}</td>
+        </tr>
+      `,
+    )
+    .join("");
 
   const renderNarrativeList = (items: AuditReportPayload["dataFacts"]) =>
     items.length === 0
@@ -295,6 +366,7 @@ export function renderReportHtml(report: AuditReportPayload): string {
     : `<p class="empty-state">${escapeHtml(labels.healthyBaseline)}</p>`;
 
   const executiveSummary = sanitizeNarrativeText(framework.executiveSummary);
+  const clientEmailDraft = framework.clientEmailDraft.trim();
   const acquisitionChartItems = (report.snapshot.trafficAttribution?.topSourceMediums ?? [])
     .slice(0, 5)
     .map((item) => ({
@@ -447,6 +519,17 @@ export function renderReportHtml(report: AuditReportPayload): string {
           .story-kicker { color: #8fa6c3; margin-bottom: 10px; }
           .story-card p, .pillar p, .confidence p, .signal-card p { margin: 0; color: #dde8f7; line-height: 1.65; }
           .story-card ul, .finding ul { margin: 12px 0 0; padding-left: 18px; color: #95a7be; }
+          .email-draft {
+            white-space: pre-wrap;
+            margin: 0;
+            color: #dde8f7;
+            line-height: 1.65;
+            font-family: "Segoe UI", sans-serif;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            padding: 16px;
+          }
           .pillar-top, .finding-meta {
             display: flex;
             justify-content: space-between;
@@ -535,6 +618,61 @@ export function renderReportHtml(report: AuditReportPayload): string {
           ${metricBandMarkup}
         </section>
 
+        ${coverageRows ? `
+          <section class="panel">
+            <div class="section-label">Integration coverage</div>
+            <h2 class="section-title">Live-ready integration coverage</h2>
+            <p class="section-copy">Only integrations that were live-ready and passed collection are used as performance evidence in this report.</p>
+            <div class="table-shell" style="margin-top: 16px;">
+              <table>
+                <thead>
+                  <tr><th>Integration</th><th>Platform</th><th>Status</th><th>Reason</th></tr>
+                </thead>
+                <tbody>${coverageRows}</tbody>
+              </table>
+            </div>
+          </section>
+        ` : ""}
+
+        ${taskManagement ? `
+          <section class="panel">
+            <div class="section-label">Actions performed this month</div>
+            <h2 class="section-title">Task context from ${escapeHtml(taskManagement.provider)}</h2>
+            <p class="section-copy">${formatNumber(report.locale, actionedTasks.length)} tasks were touched during the report period, including ${formatNumber(report.locale, completedTasksInPeriod.length)} completed actions and ${formatNumber(report.locale, activeTasksTouchedInPeriod.length)} active follow-ups.</p>
+            ${taskRows ? `
+              <div class="table-shell" style="margin-top: 16px;">
+                <table>
+                  <thead>
+                    <tr><th>Group</th><th>Task</th><th>Status</th><th>Date</th></tr>
+                  </thead>
+                  <tbody>${taskRows}</tbody>
+                </table>
+              </div>
+            ` : `<p class="empty-state" style="margin-top: 16px;">No task updates were dated inside this report period.</p>`}
+          </section>
+        ` : ""}
+
+        ${paidSourceRows && (report.snapshot.paidMediaSources ?? []).length > 1 ? `
+          <section class="panel">
+            <div class="section-label">Paid media by source</div>
+            <h2 class="section-title">Live paid media sources</h2>
+            <div class="table-shell">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Source</th>
+                    <th>${escapeHtml(labels.spend)}</th>
+                    <th>${escapeHtml(labels.clicks)}</th>
+                    <th>${escapeHtml(labels.purchases)}</th>
+                    <th>${escapeHtml(objective.kind === "lead_generation" ? labels.costPerLead : labels.roas)}</th>
+                  </tr>
+                </thead>
+                <tbody>${paidSourceRows}</tbody>
+              </table>
+            </div>
+          </section>
+        ` : ""}
+
         <section class="story-grid">
           <section class="panel">
             <div class="section-label">${escapeHtml(labels.executiveSummary)}</div>
@@ -552,6 +690,14 @@ export function renderReportHtml(report: AuditReportPayload): string {
             ${renderNarrativeList(framework.whatWeAreDoing)}
           </section>
         </section>
+
+        ${clientEmailDraft ? `
+          <section class="panel">
+            <div class="section-label">${escapeHtml(labels.clientEmailDraft)}</div>
+            <h2 class="section-title">${escapeHtml(labels.clientEmailDraft)}</h2>
+            <pre class="email-draft">${escapeHtml(clientEmailDraft)}</pre>
+          </section>
+        ` : ""}
 
         ${acquisitionChartMarkup || paidChartMarkup ? `
           <section class="panel">
