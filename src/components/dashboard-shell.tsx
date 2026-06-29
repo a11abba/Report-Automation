@@ -474,6 +474,7 @@ function getAutoConfigurationPlan(
       attemptKey: `${integration.id}:googleAdsCustomerId:${recommended.propertyId}`,
       patch: {
         googleAdsCustomerId: recommended.propertyId,
+        googleAdsLoginCustomerId: recommended.loginCustomerId ?? null,
         demoMode: false,
       },
       successMessage: `Google Ads customer auto-selected for ${client.name}.`,
@@ -2757,14 +2758,21 @@ export function DashboardShell({
                                         options={propertyOptions}
                                         onChange={(value) =>
                                           runTask(
-                                            () =>
-                                              patchJson(
+                                            () => {
+                                              const selectedCustomer =
+                                                integration.metadata?.propertySummaries?.find(
+                                                  (summary) => summary.propertyId === value,
+                                                );
+                                              return patchJson(
                                                 `/api/clients/${client.id}/integrations/${integration.id}`,
                                                 {
                                                   googleAdsCustomerId: value || null,
+                                                  googleAdsLoginCustomerId:
+                                                    selectedCustomer?.loginCustomerId ?? null,
                                                   demoMode: false,
                                                 },
-                                              ),
+                                              );
+                                            },
                                             `Google Ads account updated for ${client.name}.`,
                                           )
                                         }

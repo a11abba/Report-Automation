@@ -24,6 +24,15 @@ interface GoogleAdsRow {
     id?: string;
     descriptiveName?: string;
     currencyCode?: string;
+    manager?: boolean;
+  };
+  customerClient?: {
+    clientCustomer?: string;
+    id?: string;
+    level?: number | string;
+    manager?: boolean;
+    descriptiveName?: string;
+    currencyCode?: string;
   };
   campaign?: {
     id?: string;
@@ -50,6 +59,9 @@ interface GoogleAdsCustomerSummary {
   customerId: string;
   displayName: string;
   currencyCode: string | null;
+  manager: boolean;
+  loginCustomerId: string | null;
+  managerDisplayName: string | null;
 }
 
 export class GoogleAdsApiError extends Error {
@@ -173,7 +185,7 @@ async function readGoogleAdsCustomerSummary(
     accessToken,
     developerToken,
     customerId,
-    "SELECT customer.id, customer.descriptive_name, customer.currency_code FROM customer LIMIT 1",
+    "SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.manager FROM customer LIMIT 1",
     { loginCustomerId },
   );
   const row = payload.results?.[0];
@@ -182,7 +194,36 @@ async function readGoogleAdsCustomerSummary(
     customerId: resolvedCustomerId,
     displayName: row?.customer?.descriptiveName?.trim() || `Google Ads ${resolvedCustomerId}`,
     currencyCode: row?.customer?.currencyCode?.trim() || null,
+    manager: Boolean(row?.customer?.manager),
+    loginCustomerId: null,
+    managerDisplayName: null,
   } satisfies GoogleAdsCustomerSummary;
+}
+
+async function readGoogleAdsManagerChildren(
+  accessToken: string,
+  developerToken: string,
+  managerCustomerId: string,
+  loginCustomerId: string,
+) {
+  const payload = await runGoogleAdsSearch(
+    accessToken,
+    developerToken,
+    managerCustomerId,
+    [
+      "SELECT customer_client.client_customer, customer_client.id, customer_client.level,",
+      "customer_client.manager, customer_client.descriptive_name, customer_client.currency_code",
+      "FROM customer_client",
+      "WHERE customer_client.level <= 1",
+    ].join(" "),
+    { loginCustomerId },
+  );
+
+  return (payload.results ?? [])
+    .map((row) => row.customerClient)
+    .filter((customer): customer is NonNullable<GoogleAdsRow["customerClient"]> => {
+      return Number(customer?.level ?? -1) === 1;
+    });
 }
 
 function defaultDateRange() {
@@ -246,21 +287,77 @@ export async function fetchGoogleAdsAccessibleCustomers(
     .filter((customerId): customerId is string => Boolean(customerId))
     .slice(0, 20);
 
-  const summaries = await Promise.all(
-    customerIds.map(async (customerId) => {
-      try {
-        return await readGoogleAdsCustomerSummary(accessToken, developerToken, customerId);
-      } catch {
-        return {
-          customerId,
-          displayName: `Google Ads ${customerId}`,
-          currencyCode: null,
-        } satisfies GoogleAdsCustomerSummary;
-      }
-    }),
-  );
+  const summaries = new Map<string, GoogleAdsCustomerSummary>();
 
-  return summaries.sort((left, right) => left.displayName.localeCompare(right.displayName));
+  for (const customerId of customerIds) {
+    let root: GoogleAdsCustomerSummary;
+    try {
+      root = await readGoogleAdsCustomerSummary(accessToken, developerToken, customerId);
+    } catch {
+      root = {
+        customerId,
+        displayName: `Google Ads ${customerId}`,
+        currencyCode: null,
+        manager: false,
+        loginCustomerId: null,
+        managerDisplayName: null,
+      };
+    }
+
+    if (!root.manager) {
+      summaries.set(root.customerId, root);
+      continue;
+    }
+
+    const pendingManagers = [{ customerId: root.customerId, displayName: root.displayName }];
+    const visitedManagers = new Set<string>();
+
+    while (pendingManagers.length > 0 && visitedManagers.size < 50 && summaries.size < 200) {
+      const manager = pendingManagers.shift();
+      if (!manager || visitedManagers.has(manager.customerId)) continue;
+      visitedManagers.add(manager.customerId);
+
+      let children: Awaited<ReturnType<typeof readGoogleAdsManagerChildren>>;
+      try {
+        children = await readGoogleAdsManagerChildren(
+          accessToken,
+          developerToken,
+          manager.customerId,
+          root.customerId,
+        );
+      } catch {
+        continue;
+      }
+
+      for (const child of children) {
+        const childCustomerId = normalizeGoogleAdsCustomerId(
+          child.id ?? extractCustomerId(child.clientCustomer ?? ""),
+        );
+        if (!childCustomerId) continue;
+
+        const displayName = child.descriptiveName?.trim() || `Google Ads ${childCustomerId}`;
+        if (child.manager) {
+          pendingManagers.push({ customerId: childCustomerId, displayName });
+          continue;
+        }
+
+        if (!summaries.has(childCustomerId)) {
+          summaries.set(childCustomerId, {
+            customerId: childCustomerId,
+            displayName,
+            currencyCode: child.currencyCode?.trim() || null,
+            manager: false,
+            loginCustomerId: root.customerId,
+            managerDisplayName: manager.displayName,
+          });
+        }
+      }
+    }
+  }
+
+  return [...summaries.values()].sort((left, right) =>
+    left.displayName.localeCompare(right.displayName),
+  );
 }
 
 export async function verifyGoogleAdsCustomerAccess(
@@ -275,12 +372,21 @@ export async function verifyGoogleAdsCustomerAccess(
     throw new GoogleAdsApiError("Enter a valid Google Ads customer ID before requesting live data.", 400);
   }
 
-  return readGoogleAdsCustomerSummary(
+  const customer = await readGoogleAdsCustomerSummary(
     accessToken,
     developerToken,
     normalizedCustomerId,
     normalizedLoginCustomerId,
   );
+
+  if (customer.manager) {
+    throw new GoogleAdsApiError(
+      "The selected Google Ads customer is a manager account. Select an advertiser account as Customer ID and use the manager account as Login Customer ID.",
+      400,
+    );
+  }
+
+  return customer;
 }
 
 export async function fetchGoogleAdsSnapshot(

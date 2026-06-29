@@ -761,6 +761,7 @@ export interface IntegrationPropertySummary {
   propertyId: string;
   displayName: string;
   parentAccountName: string | null;
+  loginCustomerId?: string | null;
 }
 
 export interface ConnectorMetadataResult {

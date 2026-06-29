@@ -1188,7 +1188,8 @@ export class GoogleAdsConnector implements PlatformConnector {
         resourceName: `customers/${customer.customerId}`,
         propertyId: customer.customerId,
         displayName: customer.displayName,
-        parentAccountName: customer.currencyCode,
+        parentAccountName: customer.managerDisplayName ?? customer.currencyCode,
+        loginCustomerId: customer.loginCustomerId,
       })),
     };
   }
