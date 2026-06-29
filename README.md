@@ -32,7 +32,8 @@ To enable PDF export, run:
 
 - [Phase 1 Readiness](./docs/phase-1-readiness.md)
 - [Phase 2 Roadmap](./docs/phase-2-roadmap.md)
-- [Hostinger Beta Deploy](./docs/hostinger-beta-deploy.md)
+- [Vercel Production Deploy](./docs/vercel-deploy.md)
+- [Hostinger Domain DNS](./docs/hostinger-beta-deploy.md)
 
 ## Environment
 

@@ -2,14 +2,24 @@ import { describe, expect, it } from "vitest";
 import { resolveOAuthRedirectUri, resolveRequestOrigin } from "./oauth-redirect";
 
 describe("resolveOAuthRedirectUri", () => {
-  it("reuses the current loopback origin for localhost callbacks", () => {
+  it("keeps configured localhost callbacks on localhost", () => {
     expect(
       resolveOAuthRedirectUri({
         configuredRedirectUri: "http://localhost:3000/api/integrations/google/oauth/callback",
         requestOrigin: "http://127.0.0.1:3000",
         fallbackPath: "/api/integrations/google/oauth/callback",
       }),
-    ).toBe("http://127.0.0.1:3000/api/integrations/google/oauth/callback");
+    ).toBe("http://localhost:3000/api/integrations/google/oauth/callback");
+  });
+
+  it("reuses the current loopback origin when the configured callback is not localhost", () => {
+    expect(
+      resolveOAuthRedirectUri({
+        configuredRedirectUri: "http://127.0.0.1:3000/api/integrations/google/oauth/callback",
+        requestOrigin: "http://localhost:3000",
+        fallbackPath: "/api/integrations/google/oauth/callback",
+      }),
+    ).toBe("http://localhost:3000/api/integrations/google/oauth/callback");
   });
 
   it("keeps the configured callback for non-loopback origins", () => {
@@ -29,6 +39,25 @@ describe("resolveOAuthRedirectUri", () => {
         fallbackPath: "/api/integrations/microsoft/oauth/callback",
       }),
     ).toBe("http://localhost:3000/api/integrations/microsoft/oauth/callback");
+  });
+
+  it("falls back to the request origin when the configured callback is malformed", () => {
+    expect(
+      resolveOAuthRedirectUri({
+        configuredRedirectUri: "reporting.ferro.me",
+        requestOrigin: "https://reports.fergro.me",
+        fallbackPath: "/api/integrations/google/oauth/callback",
+      }),
+    ).toBe("https://reports.fergro.me/api/integrations/google/oauth/callback");
+  });
+
+  it("falls back to the request origin in deployed environments without a configured callback", () => {
+    expect(
+      resolveOAuthRedirectUri({
+        requestOrigin: "https://reports.fergro.me",
+        fallbackPath: "/api/integrations/google/oauth/callback",
+      }),
+    ).toBe("https://reports.fergro.me/api/integrations/google/oauth/callback");
   });
 });
 

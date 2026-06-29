@@ -43,25 +43,38 @@ export function resolveOAuthRedirectUri(input: {
   requestOrigin?: string | null;
   fallbackPath: string;
 }) {
-  const fallbackRedirectUri =
-    input.configuredRedirectUri?.trim() ||
-    `http://localhost:3000${input.fallbackPath}`;
-  const configuredUrl = safeParseUrl(fallbackRedirectUri);
+  const configuredRedirectUri = input.configuredRedirectUri?.trim();
   const requestOriginUrl = safeParseUrl(input.requestOrigin);
+  const configuredUrl = safeParseUrl(configuredRedirectUri);
 
-  if (!configuredUrl || !requestOriginUrl) {
+  if (configuredRedirectUri && !configuredUrl) {
+    if (requestOriginUrl) {
+      return new URL(input.fallbackPath, requestOriginUrl.origin).toString();
+    }
+    return configuredRedirectUri;
+  }
+
+  const fallbackRedirectUri =
+    configuredRedirectUri ||
+    (requestOriginUrl
+      ? new URL(input.fallbackPath, requestOriginUrl.origin).toString()
+      : `http://localhost:3000${input.fallbackPath}`);
+  const fallbackUrl = safeParseUrl(fallbackRedirectUri);
+
+  if (!fallbackUrl || !requestOriginUrl) {
     return fallbackRedirectUri;
   }
 
   if (
-    LOOPBACK_HOSTS.has(configuredUrl.hostname) &&
-    LOOPBACK_HOSTS.has(requestOriginUrl.hostname)
+    LOOPBACK_HOSTS.has(fallbackUrl.hostname) &&
+    LOOPBACK_HOSTS.has(requestOriginUrl.hostname) &&
+    fallbackUrl.hostname !== "localhost"
   ) {
-    const redirectUrl = new URL(configuredUrl.pathname, requestOriginUrl.origin);
-    redirectUrl.search = configuredUrl.search;
-    redirectUrl.hash = configuredUrl.hash;
+    const redirectUrl = new URL(fallbackUrl.pathname, requestOriginUrl.origin);
+    redirectUrl.search = fallbackUrl.search;
+    redirectUrl.hash = fallbackUrl.hash;
     return redirectUrl.toString();
   }
 
-  return configuredUrl.toString();
+  return fallbackUrl.toString();
 }

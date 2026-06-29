@@ -10,7 +10,6 @@ import {
   type IntegrationRecord,
   type LocationRecord,
   type PlatformKey,
-  type ReportFeedbackRecord,
   type ReportMemoryRecord,
   type ReportPeriodRecord,
 } from "@/lib/audit/types";
@@ -886,19 +885,6 @@ export async function detachReportMemoryRecordFromClient(
 ) {
   const store = await getStore();
   return store.detachReportMemoryFromClient(clientId, reportMemoryId);
-}
-
-export async function listReportFeedbackForAudit(auditId: string) {
-  const store = await getStore();
-  return store.listReportFeedbackByAudit(auditId);
-}
-
-export async function createReportFeedbackRecord(
-  auditId: string,
-  input: Pick<ReportFeedbackRecord, "rating" | "notes">,
-) {
-  const store = await getStore();
-  return store.createReportFeedback(auditId, input);
 }
 
 export async function updateClientRecord(

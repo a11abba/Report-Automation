@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   createReportFeedbackRecord,
   listReportFeedbackForAudit,
-} from "@/lib/audit-engine";
+} from "@/lib/report-feedback";
 import { reportFeedbackRatings } from "@/lib/audit/types";
 import { loadAuditForViewer, requireRouteViewer } from "@/lib/route-auth";
 
