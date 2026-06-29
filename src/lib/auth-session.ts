@@ -25,6 +25,7 @@ export interface GoogleLoginCookiePayload {
   flow: "login";
   nonce: string;
   codeVerifier: string;
+  redirectUri: string;
   locale: AppLocale;
   expiresAt: string;
 }
@@ -92,6 +93,7 @@ export async function readAuthSessionValue(value?: string | null) {
 export async function createGoogleLoginCookieValue(input: {
   nonce: string;
   codeVerifier: string;
+  redirectUri: string;
   locale: AppLocale;
 }) {
   const expiresAt = new Date(Date.now() + LOGIN_COOKIE_DURATION_SECONDS * 1000).toISOString();
@@ -100,6 +102,7 @@ export async function createGoogleLoginCookieValue(input: {
     flow: "login",
     nonce: input.nonce,
     codeVerifier: input.codeVerifier,
+    redirectUri: input.redirectUri,
     locale: input.locale,
     expiresAt,
   });

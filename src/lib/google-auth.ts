@@ -204,6 +204,7 @@ export async function buildGoogleLoginUrl(locale: AppLocale, requestOrigin?: str
   const loginCookieValue = await createGoogleLoginCookieValue({
     nonce,
     codeVerifier,
+    redirectUri,
     locale,
   });
 
@@ -226,7 +227,22 @@ export async function buildGoogleLoginUrl(locale: AppLocale, requestOrigin?: str
 async function parseTokenPayload(response: Response): Promise<IntegrationCredentials> {
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(text || "Failed to exchange Google authorization code.");
+    try {
+      const payload = JSON.parse(text) as {
+        error?: string;
+        error_description?: string;
+      };
+      throw new Error(
+        payload.error_description ||
+          payload.error ||
+          "Failed to exchange Google authorization code.",
+      );
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(text || "Failed to exchange Google authorization code.");
+      }
+      throw error;
+    }
   }
 
   const payload = await response.json();
@@ -368,6 +384,12 @@ export async function consumeGoogleOAuthCallback(url: URL): Promise<{
 }
 
 export async function consumeGoogleLoginCallback(url: URL, loginCookieValue?: string | null) {
+  const providerError =
+    url.searchParams.get("error_description") ?? url.searchParams.get("error");
+  if (providerError) {
+    throw new Error(providerError);
+  }
+
   const code = url.searchParams.get("code");
   if (!code) {
     throw new Error("Missing Google authorization code.");
@@ -391,7 +413,14 @@ export async function consumeGoogleLoginCallback(url: URL, loginCookieValue?: st
     throw new Error("Google login session did not match the callback.");
   }
 
-  const credentials = await exchangeGoogleCode(code, loginCookie.codeVerifier);
+  const redirectUri =
+    loginCookie.redirectUri ||
+    new URL("/api/integrations/google/oauth/callback", url.origin).toString();
+  const credentials = await exchangeGoogleCode(
+    code,
+    loginCookie.codeVerifier,
+    redirectUri,
+  );
   if (!credentials.accessToken) {
     throw new Error("Google did not return an access token.");
   }
