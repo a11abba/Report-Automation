@@ -17,6 +17,7 @@ import {
 } from "@/components/report-period-panel";
 import { deleteJson, getJson, patchJson, postForm, postJson } from "@/lib/api-client";
 import type { AuthSession } from "@/lib/auth-session";
+import { getAuditDisplayMetadata } from "@/lib/audit-labels";
 import { getReportFocusLabel } from "@/lib/report-focus";
 import type {
   AppRole,
@@ -3523,7 +3524,12 @@ export function DashboardShell({
                       {client.audits.length === 0 ? (
                         <EmptyState text="No audits yet for this client." compact />
                       ) : (
-                        client.audits.map((audit) => (
+                        client.audits.map((audit) => {
+                          const displayMetadata = getAuditDisplayMetadata(
+                            audit,
+                            client.integrations,
+                          );
+                          return (
                           <article
                             key={audit.id}
                             className="rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4"
@@ -3531,10 +3537,16 @@ export function DashboardShell({
                             <div className="flex items-center justify-between gap-3">
                               <div>
                                 <p className="text-xs uppercase tracking-[0.25em] text-slate-500">
-                                  Audit {audit.id.slice(-6)}
+                                  {displayMetadata.typeLabel}
                                 </p>
-                                <p className="mt-2 text-sm text-slate-400">
-                                  {new Date(audit.createdAt).toLocaleString()}
+                                <p className="mt-2 text-base font-semibold text-white">
+                                  {displayMetadata.title}
+                                </p>
+                                <p className="mt-1 text-sm text-slate-300">
+                                  {displayMetadata.sourceSummary}
+                                </p>
+                                <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                                  Audit {audit.id.slice(-6)} · {new Date(audit.createdAt).toLocaleString()}
                                 </p>
                               </div>
                               <span
@@ -3733,7 +3745,8 @@ export function DashboardShell({
                               </div>
                             </div>
                           </article>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                     </>
