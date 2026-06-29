@@ -2158,7 +2158,9 @@ export async function getStore(): Promise<AppStore> {
       const databaseUrl = process.env.DATABASE_URL?.trim();
       if (databaseUrl && /^postgres(ql)?:\/\//i.test(databaseUrl)) {
         const { PostgresStore } = await import("@/lib/postgres-store");
-        return new PostgresStore(databaseUrl);
+        const store = new PostgresStore(databaseUrl);
+        await store.waitUntilReady();
+        return store;
       }
       await mkdir(getAuditDataDir(), { recursive: true });
       return new SQLiteStore(getAuditDataFile("app.db"));

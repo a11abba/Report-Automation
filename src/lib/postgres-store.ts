@@ -128,6 +128,10 @@ export class PostgresStore implements AppStore {
     this.ready = this.initialize();
   }
 
+  async waitUntilReady() {
+    await this.ready;
+  }
+
   private async initialize() {
     await this.pool.query(`
       create table if not exists accounts (
@@ -344,7 +348,6 @@ export class PostgresStore implements AppStore {
   }
 
   private async withClient<T>(callback: (client: PoolClient) => Promise<T>) {
-    await this.ready;
     const client = await this.pool.connect();
     try {
       return await callback(client);
