@@ -1140,17 +1140,18 @@ export async function generateReportPeriod(reportPeriodId: string, visitedPeriod
     await store.updateReportPeriod(reportPeriodId, {
       status: audit.status === "completed" ? "completed" : audit.status === "failed" ? "failed" : audit.status,
       auditId: audit.id,
-      generatedAt: audit.completedAt,
+      generatedAt: audit.completedAt ?? reportPeriod.generatedAt,
     });
     return {
       audit,
       reportPeriod: (await store.getReportPeriod(reportPeriodId)) ?? reportPeriod,
     };
   } catch (error) {
+    const hasCompletedReport = reportPeriod.status === "completed" && Boolean(reportPeriod.auditId);
     await store.updateReportPeriod(reportPeriodId, {
-      status: "failed",
-      auditId: null,
-      generatedAt: null,
+      status: hasCompletedReport ? "completed" : "failed",
+      auditId: hasCompletedReport ? reportPeriod.auditId : null,
+      generatedAt: hasCompletedReport ? reportPeriod.generatedAt : null,
     });
     throw error;
   }

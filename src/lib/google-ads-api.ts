@@ -7,6 +7,13 @@ interface GoogleAdsErrorPayload {
     code?: number;
     message?: string;
     status?: string;
+    details?: Array<{
+      errors?: Array<{
+        message?: string;
+        errorCode?: Record<string, string>;
+      }>;
+      requestId?: string;
+    }>;
   };
 }
 
@@ -55,7 +62,7 @@ interface GoogleAdsRequestOptions {
   loginCustomerId?: string | null;
 }
 
-interface GoogleAdsCustomerSummary {
+export interface GoogleAdsCustomerSummary {
   customerId: string;
   displayName: string;
   currencyCode: string | null;
@@ -75,7 +82,11 @@ export class GoogleAdsApiError extends Error {
 }
 
 function extractErrorMessage(payload: GoogleAdsErrorPayload | null, fallback: string) {
-  return payload?.error?.message?.trim() || fallback;
+  const detailedMessage = payload?.error?.details
+    ?.flatMap((detail) => detail.errors ?? [])
+    .map((error) => error.message?.trim())
+    .find(Boolean);
+  return detailedMessage || payload?.error?.message?.trim() || fallback;
 }
 
 function metricNumber(value: string | number | null | undefined) {
@@ -149,6 +160,62 @@ async function fetchGoogleAdsJson<T>(
 export function normalizeGoogleAdsCustomerId(value: string | null | undefined) {
   const normalized = value?.replaceAll("-", "").trim() ?? "";
   return /^\d+$/.test(normalized) ? normalized : null;
+}
+
+function googleAdsCustomerIdDistance(left: string, right: string) {
+  if (left.length !== right.length) return Number.POSITIVE_INFINITY;
+  let distance = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) distance += 1;
+  }
+  return distance;
+}
+
+export function resolveGoogleAdsCustomerSelection(
+  customers: GoogleAdsCustomerSummary[],
+  customerId: string,
+  loginCustomerId?: string | null,
+) {
+  const normalizedCustomerId = normalizeGoogleAdsCustomerId(customerId);
+  const normalizedLoginCustomerId = normalizeGoogleAdsCustomerId(loginCustomerId);
+  if (!normalizedCustomerId) {
+    throw new GoogleAdsApiError("Enter a valid Google Ads customer ID.", 400);
+  }
+
+  const selected = customers.find((customer) => customer.customerId === normalizedCustomerId);
+  if (selected) {
+    return {
+      googleAdsCustomerId: selected.customerId,
+      googleAdsLoginCustomerId: selected.loginCustomerId,
+      correctedOrder: false,
+    };
+  }
+
+  const reversed = normalizedLoginCustomerId
+    ? customers.find(
+        (customer) =>
+          customer.customerId === normalizedLoginCustomerId &&
+          customer.loginCustomerId === normalizedCustomerId,
+      )
+    : null;
+  if (reversed) {
+    return {
+      googleAdsCustomerId: reversed.customerId,
+      googleAdsLoginCustomerId: reversed.loginCustomerId,
+      correctedOrder: true,
+    };
+  }
+
+  const suggestion = customers.find(
+    (customer) => googleAdsCustomerIdDistance(customer.customerId, normalizedCustomerId) === 1,
+  );
+  const suggestionMessage = suggestion
+    ? ` Did you mean ${suggestion.customerId} (${suggestion.displayName})?`
+    : "";
+  throw new GoogleAdsApiError(
+    `Google Ads customer ${normalizedCustomerId} is not accessible to this connection.${suggestionMessage}`,
+    400,
+  );
 }
 
 function extractCustomerId(resourceName: string) {

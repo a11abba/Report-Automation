@@ -2,6 +2,7 @@
 
 import { useState, type InputHTMLAttributes } from "react";
 import { deleteJson, patchJson, postJson } from "@/lib/api-client";
+import { canExportMonthlyReport } from "@/lib/report-period-status";
 import { getPreviousMonthKey } from "@/lib/report-scheduler-utils";
 
 interface ContextEntryView {
@@ -125,6 +126,16 @@ function formatMonthLabel(periodKey: string | null | undefined) {
   }).format(new Date(Date.UTC(year, month - 1, 1)));
 }
 
+function formatReportUpdatedAt(value: string | null) {
+  if (!value) return "Not generated yet";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Update date unavailable";
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
 function summarizeBusinessInputs(reportPeriod: ReportPeriodView) {
   const parts: string[] = [];
   if (reportPeriod.manualInputs.leads != null) parts.push(`${reportPeriod.manualInputs.leads} leads`);
@@ -182,6 +193,24 @@ export function ReportPeriodPanel({
   const [prepPeriodId, setPrepPeriodId] = useState<string | null>(null);
   const [newPeriodKey, setNewPeriodKey] = useState("");
   const [newComparisonMonth, setNewComparisonMonth] = useState("");
+
+  const requestReport = (reportPeriod: ReportPeriodView) => {
+    const isUpdate = reportPeriod.status === "completed";
+    runTask(
+      () =>
+        postJson<ReportGenerationResponse>(
+          `/api/report-periods/${reportPeriod.id}/generate`,
+          {},
+        ),
+      `${isUpdate ? "Monthly report update" : "Monthly report"} requested for ${reportPeriod.periodKey}.`,
+      ({ audit }) =>
+        onReportRequested({
+          auditId: audit.id,
+          periodLabel: formatMonthLabel(reportPeriod.periodKey),
+          status: audit.status,
+        }),
+    );
+  };
 
   return (
     <section className="mt-5 rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4">
@@ -278,10 +307,40 @@ export function ReportPeriodPanel({
                       : ""}
                   </p>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <time
+                    className="px-2 py-2 text-xs text-slate-400"
+                    dateTime={reportPeriod.generatedAt ?? undefined}
+                  >
+                    Last updated: {formatReportUpdatedAt(reportPeriod.generatedAt)}
+                  </time>
                   <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] uppercase tracking-[0.2em] text-slate-300">
                     {reportPeriod.status}
                   </span>
+                  {reportPeriod.status === "completed" ? (
+                    <button
+                      type="button"
+                      className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200 transition hover:bg-white/[0.08] disabled:opacity-50"
+                      disabled={readyIntegrationCount === 0}
+                      onClick={() => requestReport(reportPeriod)}
+                    >
+                      Update report
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="rounded-full border border-[#8f7a2f] bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-4 py-2 text-sm font-medium text-[#11161f] disabled:opacity-50"
+                    disabled={readyIntegrationCount === 0}
+                    onClick={() =>
+                      setPrepPeriodId((current) =>
+                        current === reportPeriod.id ? null : reportPeriod.id,
+                      )
+                    }
+                  >
+                    {prepPeriodId === reportPeriod.id
+                      ? "Close month setup"
+                      : "Open month setup"}
+                  </button>
                   {reportPeriod.status === "queued" && reportPeriod.auditId ? (
                     <button
                       type="button"
@@ -310,42 +369,32 @@ export function ReportPeriodPanel({
                       Remove from dashboard
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    className="rounded-full border border-[#8f7a2f] bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-4 py-2 text-sm font-medium text-[#11161f] disabled:opacity-50"
-                    disabled={readyIntegrationCount === 0}
-                    onClick={() =>
-                      setPrepPeriodId((current) =>
-                        current === reportPeriod.id ? null : reportPeriod.id,
-                      )
-                    }
-                  >
-                    {prepPeriodId === reportPeriod.id
-                      ? "Close month setup"
-                      : "Open month setup"}
-                  </button>
                   <a
                     className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200 transition hover:bg-white/[0.08]"
                     href={`/reports/${reportPeriod.id}`}
                   >
                     Open page
                   </a>
-                  <a
-                    className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200 transition hover:bg-white/[0.08]"
-                    href={`/api/report-periods/${reportPeriod.id}/report.json`}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    JSON
-                  </a>
-                  <a
-                    className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200 transition hover:bg-white/[0.08]"
-                    href={`/api/report-periods/${reportPeriod.id}/report.pdf`}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    PDF
-                  </a>
+                  {canExportMonthlyReport(reportPeriod.status) ? (
+                    <>
+                      <a
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200 transition hover:bg-white/[0.08]"
+                        href={`/api/report-periods/${reportPeriod.id}/report.json`}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        JSON
+                      </a>
+                      <a
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-200 transition hover:bg-white/[0.08]"
+                        href={`/api/report-periods/${reportPeriod.id}/report.pdf`}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        PDF
+                      </a>
+                    </>
+                  ) : null}
                 </div>
               </div>
 
@@ -402,28 +451,15 @@ export function ReportPeriodPanel({
                         reportPeriod.status === "queued" ||
                         reportPeriod.status === "running"
                       }
-                      onClick={() =>
-                        runTask(
-                          () =>
-                            postJson<ReportGenerationResponse>(
-                              `/api/report-periods/${reportPeriod.id}/generate`,
-                              {},
-                            ),
-                          `Monthly report requested for ${reportPeriod.periodKey}.`,
-                          ({ audit }) =>
-                            onReportRequested({
-                              auditId: audit.id,
-                              periodLabel: formatMonthLabel(reportPeriod.periodKey),
-                              status: audit.status,
-                            }),
-                        )
-                      }
+                      onClick={() => requestReport(reportPeriod)}
                     >
                       {reportPeriod.status === "queued"
                         ? "Report requested"
                         : reportPeriod.status === "running"
                           ? "Generating report"
-                          : "Generate monthly report"}
+                          : reportPeriod.status === "completed"
+                            ? "Update monthly report"
+                            : "Generate monthly report"}
                     </button>
                   </div>
 

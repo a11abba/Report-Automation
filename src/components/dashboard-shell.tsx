@@ -461,13 +461,22 @@ function getAutoConfigurationPlan(
     };
   }
 
-  if (
-    integration.platformKey === "google_ads" &&
-    !integration.settings.googleAdsCustomerId
-  ) {
+  if (integration.platformKey === "google_ads") {
+    const availableCustomers = integration.metadata?.propertySummaries;
+    const currentCustomer = availableCustomers?.find(
+      (summary) => summary.propertyId === integration.settings.googleAdsCustomerId,
+    );
+    const currentLoginCustomerId =
+      integration.settings.googleAdsLoginCustomerId?.replaceAll("-", "") ?? null;
+    if (
+      currentCustomer &&
+      (currentCustomer.loginCustomerId ?? null) === currentLoginCustomerId
+    ) {
+      return null;
+    }
     const recommended = pickRecommendedSummary(
       client,
-      integration.metadata?.propertySummaries,
+      availableCustomers,
     );
     if (!recommended) return null;
     return {
@@ -1542,6 +1551,9 @@ export function DashboardShell({
               data.clients.map((client) => {
                 const connectedIntegrations = client.integrations.filter(
                   (integration) => integration.connectionStatus === "ready",
+                );
+                const standaloneAudits = client.audits.filter(
+                  (audit) => !audit.scope?.reportPeriodId,
                 );
                 const isClientExpanded = expandedClientIds.includes(client.id);
 
@@ -3510,9 +3522,11 @@ export function DashboardShell({
                       </div>
                     </div>
 
+                    {standaloneAudits.length > 0 ? (
+                    <>
                     <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-                      <h4 className="font-semibold text-white">Recent reports</h4>
-                      {client.audits.some((audit) => audit.status === "canceled") ? (
+                      <h4 className="font-semibold text-white">Other report runs</h4>
+                      {standaloneAudits.some((audit) => audit.status === "canceled") ? (
                         <button
                           type="button"
                           className="rounded-full border border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200 transition hover:bg-rose-500/15"
@@ -3529,10 +3543,10 @@ export function DashboardShell({
                       ) : null}
                     </div>
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      {client.audits.length === 0 ? (
+                      {standaloneAudits.length === 0 ? (
                         <EmptyState text="No audits yet for this client." compact />
                       ) : (
-                        client.audits.map((audit) => {
+                        standaloneAudits.map((audit) => {
                           const displayMetadata = getAuditDisplayMetadata(
                             audit,
                             client.integrations,
@@ -3757,6 +3771,8 @@ export function DashboardShell({
                         })
                       )}
                     </div>
+                    </>
+                    ) : null}
                     </>
                     ) : null}
                   </article>

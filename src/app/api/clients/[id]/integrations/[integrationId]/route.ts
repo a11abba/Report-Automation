@@ -3,6 +3,7 @@ import { z } from "zod";
 import { deleteIntegrationRecord, updateIntegrationRecord } from "@/lib/audit-engine";
 import { assertSafeAuditUrl } from "@/lib/audit-url";
 import { loadClientForViewer, loadIntegrationForViewer, requireRouteViewer } from "@/lib/route-auth";
+import { validateGoogleAdsSelection } from "@/services/google-ads-selection";
 
 const updateIntegrationSchema = z.object({
   displayName: z.string().min(2).optional(),
@@ -62,8 +63,39 @@ export async function PATCH(
     if (body.businessAccountId !== undefined) settingsPatch.businessAccountId = body.businessAccountId;
     if (body.businessProfileId !== undefined) settingsPatch.businessProfileId = body.businessProfileId;
     if (body.adAccountId !== undefined) settingsPatch.adAccountId = body.adAccountId;
-    if (body.googleAdsCustomerId !== undefined) settingsPatch.googleAdsCustomerId = body.googleAdsCustomerId;
-    if (body.googleAdsLoginCustomerId !== undefined) settingsPatch.googleAdsLoginCustomerId = body.googleAdsLoginCustomerId;
+    if (
+      existing.platformKey === "google_ads" &&
+      (body.googleAdsCustomerId !== undefined || body.googleAdsLoginCustomerId !== undefined)
+    ) {
+      const requestedCustomerId =
+        body.googleAdsCustomerId === undefined
+          ? existing.settings.googleAdsCustomerId
+          : body.googleAdsCustomerId;
+      const requestedLoginCustomerId =
+        body.googleAdsLoginCustomerId === undefined
+          ? existing.settings.googleAdsLoginCustomerId
+          : body.googleAdsLoginCustomerId;
+
+      if (requestedCustomerId?.trim()) {
+        const selection = await validateGoogleAdsSelection(
+          existing,
+          requestedCustomerId,
+          requestedLoginCustomerId,
+        );
+        settingsPatch.googleAdsCustomerId = selection.googleAdsCustomerId;
+        settingsPatch.googleAdsLoginCustomerId = selection.googleAdsLoginCustomerId;
+      } else {
+        settingsPatch.googleAdsCustomerId = null;
+        settingsPatch.googleAdsLoginCustomerId = null;
+      }
+    } else {
+      if (body.googleAdsCustomerId !== undefined) {
+        settingsPatch.googleAdsCustomerId = body.googleAdsCustomerId;
+      }
+      if (body.googleAdsLoginCustomerId !== undefined) {
+        settingsPatch.googleAdsLoginCustomerId = body.googleAdsLoginCustomerId;
+      }
+    }
     if (body.microsoftCustomerId !== undefined) settingsPatch.microsoftCustomerId = body.microsoftCustomerId;
     if (body.microsoftAccountId !== undefined) settingsPatch.microsoftAccountId = body.microsoftAccountId;
     if (body.merchantStoreId !== undefined) settingsPatch.merchantStoreId = body.merchantStoreId;
