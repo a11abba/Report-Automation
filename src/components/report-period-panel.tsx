@@ -107,6 +107,11 @@ interface ReportPeriodMutationResponse {
   reportPeriod: ReportPeriodView;
 }
 
+interface ReportGenerationResponse {
+  audit: { id: string };
+  reportPeriod: ReportPeriodView;
+}
+
 function formatMonthLabel(periodKey: string | null | undefined) {
   if (!periodKey) return "No comparison month";
   const [year, month] = periodKey.split("-").map((item) => Number(item));
@@ -136,7 +141,7 @@ export interface ReportPeriodView {
   periodEnd: string;
   baselinePeriodId: string | null;
   baselinePeriodKey: string | null;
-  status: "draft" | "queued" | "running" | "completed" | "failed";
+  status: "draft" | "queued" | "running" | "completed" | "failed" | "canceled";
   auditId: string | null;
   generatedAt: string | null;
   manualInputs: {
@@ -154,6 +159,8 @@ export function ReportPeriodPanel({
   reportPeriods,
   readyIntegrationCount,
   runTask,
+  onReportRequested,
+  onCancelReport,
 }: {
   clientId: string;
   reportPeriods: ReportPeriodView[];
@@ -163,6 +170,8 @@ export function ReportPeriodPanel({
     successMessage: string,
     onSuccess?: (result: T) => void,
   ) => void;
+  onReportRequested: (request: { auditId: string; periodLabel: string }) => void;
+  onCancelReport: (auditId: string, label: string) => void;
 }) {
   const [prepPeriodId, setPrepPeriodId] = useState<string | null>(null);
   const [newPeriodKey, setNewPeriodKey] = useState("");
@@ -267,6 +276,20 @@ export function ReportPeriodPanel({
                   <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-[10px] uppercase tracking-[0.2em] text-slate-300">
                     {reportPeriod.status}
                   </span>
+                  {reportPeriod.status === "queued" && reportPeriod.auditId ? (
+                    <button
+                      type="button"
+                      className="rounded-full border border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200 transition hover:bg-rose-500/15"
+                      onClick={() =>
+                        onCancelReport(
+                          reportPeriod.auditId!,
+                          `${formatMonthLabel(reportPeriod.periodKey)} report`,
+                        )
+                      }
+                    >
+                      Cancel request
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="rounded-full border border-[#8f7a2f] bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-4 py-2 text-sm font-medium text-[#11161f] disabled:opacity-50"
@@ -354,15 +377,32 @@ export function ReportPeriodPanel({
                     <button
                       type="button"
                       className="rounded-full border border-[#8f7a2f] bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-4 py-2 text-sm font-medium text-[#11161f] disabled:opacity-50"
-                      disabled={readyIntegrationCount === 0}
+                      disabled={
+                        readyIntegrationCount === 0 ||
+                        reportPeriod.status === "queued" ||
+                        reportPeriod.status === "running"
+                      }
                       onClick={() =>
                         runTask(
-                          () => postJson(`/api/report-periods/${reportPeriod.id}/generate`, {}),
+                          () =>
+                            postJson<ReportGenerationResponse>(
+                              `/api/report-periods/${reportPeriod.id}/generate`,
+                              {},
+                            ),
                           `Monthly report requested for ${reportPeriod.periodKey}.`,
+                          ({ audit }) =>
+                            onReportRequested({
+                              auditId: audit.id,
+                              periodLabel: formatMonthLabel(reportPeriod.periodKey),
+                            }),
                         )
                       }
                     >
-                      Generate monthly report
+                      {reportPeriod.status === "queued"
+                        ? "Report requested"
+                        : reportPeriod.status === "running"
+                          ? "Generating report"
+                          : "Generate monthly report"}
                     </button>
                   </div>
 

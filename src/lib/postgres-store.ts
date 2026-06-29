@@ -1353,6 +1353,24 @@ export class PostgresStore implements AppStore {
     return next;
   }
 
+  async claimQueuedAudit(id: string) {
+    const now = new Date().toISOString();
+    const result = await this.pool.query(
+      "update audits set status = 'running', updated_at = $1, error_message = null where id = $2 and status = 'queued' returning id",
+      [now, id],
+    );
+    return result.rowCount ? this.getAudit(id) : null;
+  }
+
+  async cancelQueuedAudit(id: string) {
+    const now = new Date().toISOString();
+    const result = await this.pool.query(
+      "update audits set status = 'canceled', updated_at = $1, completed_at = $1, error_message = null where id = $2 and status = 'queued' returning id",
+      [now, id],
+    );
+    return result.rowCount ? this.getAudit(id) : null;
+  }
+
   async saveReport(auditId: string, report: AuditReportPayload) {
     await this.pool.query(
       `insert into audit_reports (audit_id, payload) values ($1,$2::jsonb)

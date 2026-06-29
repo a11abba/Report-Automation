@@ -464,6 +464,7 @@ export async function runAudit(auditId: string) {
   const store = await getStore();
   const audit = await store.getAudit(auditId);
   if (!audit) throw new Error(`Audit ${auditId} not found.`);
+  if (audit.status !== "queued") return null;
   const client = await store.getClient(audit.clientId);
   if (!client) throw new Error(`Client ${audit.clientId} not found.`);
   const dateRange = getAuditDateRange(audit.scope);
@@ -477,7 +478,8 @@ export async function runAudit(auditId: string) {
   const auditJob = (await store.listJobs({ kind: "audit_run" })).find(
     (job) => job.payload["auditId"] === auditId,
   );
-  await store.updateAudit(auditId, { status: "running", errorMessage: null });
+  const claimedAudit = await store.claimQueuedAudit(auditId);
+  if (!claimedAudit) return null;
   if (audit.scope?.reportPeriodId) {
     await store.updateReportPeriod(audit.scope.reportPeriodId, {
       status: "running",
@@ -731,6 +733,45 @@ export async function getAuditDetail(auditId: string) {
 export async function getAuditLocations(auditId: string) {
   const { report } = await getAuditDetail(auditId);
   return report?.snapshot.locations ?? [];
+}
+
+export async function cancelAudit(auditId: string) {
+  const store = await getStore();
+  const current = await store.getAudit(auditId);
+  if (!current) {
+    throw new Error("Audit not found.");
+  }
+
+  const audit = await store.cancelQueuedAudit(auditId);
+  if (!audit) {
+    throw new Error("Only reports that are still queued can be canceled.");
+  }
+
+  const auditJob = (await store.listJobs({ kind: "audit_run" })).find(
+    (job) => job.payload["auditId"] === auditId,
+  );
+  if (auditJob?.status === "queued") {
+    await store.updateJob(auditJob.id, {
+      status: "canceled",
+      completedAt: new Date().toISOString(),
+    });
+  }
+  if (audit.scope?.reportPeriodId) {
+    const reportPeriod = await store.getReportPeriod(audit.scope.reportPeriodId);
+    if (reportPeriod?.status === "queued") {
+      await store.updateReportPeriod(reportPeriod.id, {
+        status: "canceled",
+        auditId,
+        generatedAt: null,
+      });
+    }
+  }
+  await logEvent({
+    auditId,
+    code: "audit.canceled",
+    message: `Audit ${auditId} canceled before processing started.`,
+  });
+  return audit;
 }
 
 export async function createAuditForClient(clientId: string, scope?: AuditScope) {

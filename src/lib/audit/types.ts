@@ -82,7 +82,7 @@ export const reportFocuses = [
   "paid_media",
 ] as const;
 export const integrationConnectionStatuses = ["demo", "attention", "ready"] as const;
-export const reportPeriodStatuses = ["draft", "queued", "running", "completed", "failed"] as const;
+export const reportPeriodStatuses = ["draft", "queued", "running", "completed", "failed", "canceled"] as const;
 export const contextEntryTypes = [
   "note",
   "budget_change",
@@ -789,7 +789,7 @@ export interface OAuthSessionRecord {
 
 export const auditEventLevels = ["info", "warn", "error"] as const;
 export const jobKinds = ["audit_run", "location_sync", "report_export", "report_schedule"] as const;
-export const jobStatuses = ["queued", "running", "completed", "failed"] as const;
+export const jobStatuses = ["queued", "running", "completed", "failed", "canceled"] as const;
 
 export type AuditEventLevel = (typeof auditEventLevels)[number];
 export type JobKind = (typeof jobKinds)[number];
@@ -883,7 +883,7 @@ export interface AuditRecord {
   clientId: string;
   integrationIds: string[];
   scope: AuditScope | null;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "canceled";
   score: number | null;
   grade: "A" | "B" | "C" | "D" | "F" | null;
   createdAt: string;

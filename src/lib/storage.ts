@@ -218,6 +218,8 @@ export interface AppStore {
   getAudit(id: string): Promise<AuditRecord | null>;
   createAudit(input: Pick<AuditRecord, "clientId" | "integrationIds" | "scope">): Promise<AuditRecord>;
   updateAudit(id: string, patch: Partial<AuditRecord>): Promise<AuditRecord | null>;
+  claimQueuedAudit(id: string): Promise<AuditRecord | null>;
+  cancelQueuedAudit(id: string): Promise<AuditRecord | null>;
   saveReport(auditId: string, report: AuditReportPayload): Promise<void>;
   getReport(auditId: string): Promise<AuditReportPayload | null>;
   listReportPeriodsByClient(clientId: string): Promise<ReportPeriodRecord[]>;
@@ -1801,6 +1803,24 @@ class SQLiteStore implements AppStore {
       id,
     );
     return next;
+  }
+
+  async claimQueuedAudit(id: string) {
+    await this.ensureMigrated();
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare("update audits set status = 'running', updated_at = ?, error_message = null where id = ? and status = 'queued'")
+      .run(now, id);
+    return result.changes > 0 ? this.getAudit(id) : null;
+  }
+
+  async cancelQueuedAudit(id: string) {
+    await this.ensureMigrated();
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare("update audits set status = 'canceled', updated_at = ?, completed_at = ?, error_message = null where id = ? and status = 'queued'")
+      .run(now, now, id);
+    return result.changes > 0 ? this.getAudit(id) : null;
   }
 
   async saveReport(auditId: string, report: AuditReportPayload) {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAuditDetail } from "@/lib/audit-engine";
+import { cancelAudit, getAuditDetail } from "@/lib/audit-engine";
 import { loadAuditForViewer, requireRouteViewer } from "@/lib/route-auth";
 
 export async function GET(
@@ -17,4 +17,25 @@ export async function GET(
   }
 
   return NextResponse.json(detail);
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const { viewer, response } = await requireRouteViewer();
+  if (!viewer) return response;
+
+  try {
+    const { id } = await context.params;
+    const { response: auditResponse } = await loadAuditForViewer(viewer, id);
+    if (auditResponse) return auditResponse;
+    const audit = await cancelAudit(id);
+    return NextResponse.json({ audit });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to cancel report." },
+      { status: 409 },
+    );
+  }
 }

@@ -214,6 +214,17 @@ interface BannerMessage {
   text: string;
 }
 
+interface ReportRequestConfirmation {
+  title: string;
+  detail: string;
+  reference: string;
+}
+
+interface CancelReportIntent {
+  auditId: string;
+  label: string;
+}
+
 interface ClientCreateResponse {
   client: unknown;
   warnings?: string[];
@@ -499,6 +510,9 @@ export function DashboardShell({
   const queryClient = useQueryClient();
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<BannerMessage | null>(null);
+  const [requestConfirmation, setRequestConfirmation] =
+    useState<ReportRequestConfirmation | null>(null);
+  const [cancelReportIntent, setCancelReportIntent] = useState<CancelReportIntent | null>(null);
   const [deleteIntentClientId, setDeleteIntentClientId] = useState<string | null>(null);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState("");
   const [expandedClientIds, setExpandedClientIds] = useState<string[]>(() =>
@@ -700,6 +714,89 @@ export function DashboardShell({
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_top_left,rgba(243,193,91,0.12),transparent_24%),radial-gradient(circle_at_85%_12%,rgba(53,130,246,0.16),transparent_18%),linear-gradient(180deg,#091019_0%,#0b111a_48%,#0a0f16_100%)] text-slate-100">
+      {requestConfirmation ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="report-requested-title"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setRequestConfirmation(null);
+          }}
+        >
+          <div className="w-full max-w-md rounded-[1.75rem] border border-emerald-400/20 bg-[#151d29] p-6 shadow-[0_30px_100px_rgba(0,0,0,0.55)]">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full border border-emerald-400/25 bg-emerald-400/10 text-xl text-emerald-200">
+              ✓
+            </div>
+            <h2 id="report-requested-title" className="mt-5 text-2xl font-semibold text-white">
+              {requestConfirmation.title}
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              {requestConfirmation.detail}
+            </p>
+            <p className="mt-4 rounded-2xl border border-white/10 bg-[#0e1621] px-4 py-3 font-mono text-xs uppercase tracking-[0.18em] text-slate-400">
+              {requestConfirmation.reference}
+            </p>
+            <button
+              type="button"
+              autoFocus
+              className="mt-6 w-full rounded-full border border-[#8f7a2f] bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-4 py-3 text-sm font-medium text-[#11161f]"
+              onClick={() => setRequestConfirmation(null)}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {cancelReportIntent ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur-sm"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="cancel-report-title"
+          aria-describedby="cancel-report-description"
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !pending) setCancelReportIntent(null);
+          }}
+        >
+          <div className="w-full max-w-md rounded-[1.75rem] border border-rose-400/20 bg-[#151d29] p-6 shadow-[0_30px_100px_rgba(0,0,0,0.55)]">
+            <h2 id="cancel-report-title" className="text-2xl font-semibold text-white">
+              Cancel this report request?
+            </h2>
+            <p id="cancel-report-description" className="mt-3 text-sm leading-6 text-slate-300">
+              {cancelReportIntent.label} will be removed from the processing queue. This is only
+              possible before report generation starts.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
+                disabled={pending}
+                onClick={() => setCancelReportIntent(null)}
+              >
+                Keep request
+              </button>
+              <button
+                type="button"
+                autoFocus
+                className="rounded-full border border-rose-400/30 bg-rose-500/15 px-4 py-3 text-sm font-medium text-rose-100 disabled:opacity-50"
+                disabled={pending}
+                onClick={() =>
+                  runTask(
+                    () => deleteJson(`/api/audits/${cancelReportIntent.auditId}`),
+                    `${cancelReportIntent.label} canceled.`,
+                    () => setCancelReportIntent(null),
+                  )
+                }
+              >
+                {pending ? "Canceling…" : "Cancel request"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid min-h-screen min-w-0 lg:grid-cols-[284px_minmax(0,1fr)]">
         <aside className="min-w-0 border-b border-white/10 bg-[linear-gradient(180deg,rgba(20,28,41,0.96)_0%,rgba(16,23,35,0.96)_100%)] px-5 py-6 lg:border-b-0 lg:border-r">
           <div className="flex items-center gap-4">
@@ -1508,8 +1605,18 @@ export function DashboardShell({
                           disabled={pending || connectedIntegrations.length === 0}
                           onClick={() =>
                             runTask(
-                              () => postJson(`/api/clients/${client.id}/audits`, {}),
+                              () =>
+                                postJson<{ audit: AuditRecord }>(
+                                  `/api/clients/${client.id}/audits`,
+                                  {},
+                                ),
                               `Audit requested for ${client.name}.`,
+                              ({ audit }) =>
+                                setRequestConfirmation({
+                                  title: "Report requested",
+                                  detail: `The diagnostic report for ${client.name} was added to the processing queue.`,
+                                  reference: `Audit ${audit.id.slice(-6)} · queued`,
+                                }),
                             )
                           }
                         >
@@ -3320,6 +3427,16 @@ export function DashboardShell({
                       reportPeriods={client.reportPeriods}
                       readyIntegrationCount={connectedIntegrations.length}
                       runTask={runTask}
+                      onReportRequested={({ auditId, periodLabel }) =>
+                        setRequestConfirmation({
+                          title: "Monthly report requested",
+                          detail: `${periodLabel} was added to the processing queue.`,
+                          reference: `Audit ${auditId.slice(-6)} · queued`,
+                        })
+                      }
+                      onCancelReport={(auditId, label) =>
+                        setCancelReportIntent({ auditId, label })
+                      }
                     />
 
                     <div className="mt-5 rounded-[1.25rem] border border-white/10 bg-[#0f1723] p-4">
@@ -3371,8 +3488,10 @@ export function DashboardShell({
                                   "rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em]",
                                   audit.status === "completed" && "bg-emerald-100 text-emerald-700",
                                   audit.status === "failed" && "bg-rose-100 text-rose-700",
+                                  audit.status === "canceled" && "bg-slate-200 text-slate-700",
                                   audit.status !== "completed" &&
                                     audit.status !== "failed" &&
+                                    audit.status !== "canceled" &&
                                     "bg-amber-100 text-amber-700",
                                 )}
                               >
@@ -3424,6 +3543,20 @@ export function DashboardShell({
                               ) : (
                                 <span className="text-slate-500">PDF unavailable</span>
                               )}
+                              {audit.status === "queued" ? (
+                                <button
+                                  type="button"
+                                  className="text-rose-300 underline decoration-rose-300/50 underline-offset-2"
+                                  onClick={() =>
+                                    setCancelReportIntent({
+                                      auditId: audit.id,
+                                      label: `Audit ${audit.id.slice(-6)}`,
+                                    })
+                                  }
+                                >
+                                  Cancel request
+                                </button>
+                              ) : null}
                             </div>
                             <div className="mt-5 rounded-[1rem] border border-white/10 bg-[#182230] p-4">
                               <div className="flex items-start justify-between gap-3">
