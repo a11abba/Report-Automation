@@ -1,5 +1,7 @@
 import type { AuditReportPayload } from "@/lib/audit/types";
-import { getPdfRendererStatus, renderReportHtml, renderReportPdf } from "@/lib/reports";
+import { renderReportPdf } from "@/lib/pdf-renderer";
+import { getPdfRendererStatus } from "@/lib/pdf-renderer-status";
+import { renderReportHtml } from "@/lib/reports";
 
 export function getReportRendererDiagnostics() {
   return getPdfRendererStatus();

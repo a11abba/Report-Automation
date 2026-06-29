@@ -19,6 +19,14 @@ const cspHeader = [
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
+  outputFileTracingIncludes: {
+    "/api/audits/*/report.pdf": [
+      "./node_modules/@sparticuz/chromium/bin/**/*",
+    ],
+    "/api/report-periods/*/report.pdf": [
+      "./node_modules/@sparticuz/chromium/bin/**/*",
+    ],
+  },
   outputFileTracingExcludes: {
     "/*": [
       "./.codex-*",

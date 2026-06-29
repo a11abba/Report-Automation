@@ -1,4 +1,4 @@
-import { renderReportPdf } from "@/lib/reports";
+import { renderReportPdf } from "@/lib/pdf-renderer";
 import { getAuditDetail } from "@/lib/audit-engine";
 import { loadAuditForViewer, requireRouteViewer } from "@/lib/route-auth";
 

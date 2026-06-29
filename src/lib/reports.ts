@@ -1,5 +1,3 @@
-import { accessSync, constants } from "node:fs";
-import { chromium } from "playwright";
 import { type AuditReportPayload } from "@/lib/audit/types";
 import { deriveHeadlineMetrics } from "@/lib/report-metrics";
 import {
@@ -132,21 +130,6 @@ function renderBarChartCard({
       </svg>
     </article>
   `;
-}
-
-export function getPdfRendererStatus() {
-  try {
-    accessSync(chromium.executablePath(), constants.F_OK);
-    return {
-      available: true,
-      message: "Playwright Chromium is ready.",
-    };
-  } catch {
-    return {
-      available: false,
-      message: "Playwright Chromium is missing. Run `npx playwright install chromium` to enable PDF export.",
-    };
-  }
 }
 
 export function renderReportHtml(report: AuditReportPayload): string {
@@ -827,25 +810,4 @@ export function renderReportHtml(report: AuditReportPayload): string {
       </body>
     </html>
   `;
-}
-
-export async function renderReportPdf(report: AuditReportPayload): Promise<Buffer> {
-  const status = getPdfRendererStatus();
-  if (!status.available) {
-    throw new Error(status.message);
-  }
-
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    await page.setContent(renderReportHtml(report), { waitUntil: "networkidle" });
-    const buffer = await page.pdf({
-      printBackground: true,
-      format: "A4",
-      margin: { top: "24px", right: "24px", bottom: "24px", left: "24px" },
-    });
-    return Buffer.from(buffer);
-  } finally {
-    await browser.close();
-  }
 }

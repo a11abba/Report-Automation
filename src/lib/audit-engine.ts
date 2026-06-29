@@ -36,7 +36,7 @@ import {
 import { enhanceReportWithAi } from "@/lib/report-ai";
 import { resolveScheduledMonthlyPeriod } from "@/lib/report-scheduler-utils";
 import { buildReport, evaluateRules, rulePackCatalog } from "@/lib/rules";
-import { getPdfRendererStatus } from "@/lib/reports";
+import { getPdfRendererStatus } from "@/lib/pdf-renderer-status";
 import { deriveMonthRange, emptyReportPeriodManualInputs } from "@/lib/report-period-utils";
 import { getStore } from "@/lib/storage";
 import {
