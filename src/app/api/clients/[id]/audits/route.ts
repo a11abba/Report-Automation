@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { AuditPreflightError, createAuditForClient } from "@/lib/audit-engine";
+import {
+  AuditPreflightError,
+  createAuditForClient,
+  deleteCanceledAuditsForClient,
+} from "@/lib/audit-engine";
 import { loadClientForViewer, requireRouteViewer } from "@/lib/route-auth";
+
+export const maxDuration = 300;
 
 const auditScopeSchema = z
   .object({
@@ -43,4 +49,17 @@ export async function POST(
       { status: 400 },
     );
   }
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const { viewer, response } = await requireRouteViewer();
+  if (!viewer) return response;
+  const { id } = await context.params;
+  const { response: clientResponse } = await loadClientForViewer(viewer, id);
+  if (clientResponse) return clientResponse;
+  const result = await deleteCanceledAuditsForClient(id);
+  return NextResponse.json(result);
 }

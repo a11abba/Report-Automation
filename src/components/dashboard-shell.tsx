@@ -220,9 +220,10 @@ interface ReportRequestConfirmation {
   reference: string;
 }
 
-interface CancelReportIntent {
-  auditId: string;
+interface ReportRemovalIntent {
+  url: string;
   label: string;
+  action: "cancel" | "delete";
 }
 
 interface ClientCreateResponse {
@@ -512,7 +513,8 @@ export function DashboardShell({
   const [message, setMessage] = useState<BannerMessage | null>(null);
   const [requestConfirmation, setRequestConfirmation] =
     useState<ReportRequestConfirmation | null>(null);
-  const [cancelReportIntent, setCancelReportIntent] = useState<CancelReportIntent | null>(null);
+  const [reportRemovalIntent, setReportRemovalIntent] =
+    useState<ReportRemovalIntent | null>(null);
   const [deleteIntentClientId, setDeleteIntentClientId] = useState<string | null>(null);
   const [deleteConfirmationText, setDeleteConfirmationText] = useState("");
   const [expandedClientIds, setExpandedClientIds] = useState<string[]>(() =>
@@ -749,7 +751,7 @@ export function DashboardShell({
         </div>
       ) : null}
 
-      {cancelReportIntent ? (
+      {reportRemovalIntent ? (
         <div
           className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur-sm"
           role="alertdialog"
@@ -757,25 +759,28 @@ export function DashboardShell({
           aria-labelledby="cancel-report-title"
           aria-describedby="cancel-report-description"
           onKeyDown={(event) => {
-            if (event.key === "Escape" && !pending) setCancelReportIntent(null);
+            if (event.key === "Escape" && !pending) setReportRemovalIntent(null);
           }}
         >
           <div className="w-full max-w-md rounded-[1.75rem] border border-rose-400/20 bg-[#151d29] p-6 shadow-[0_30px_100px_rgba(0,0,0,0.55)]">
             <h2 id="cancel-report-title" className="text-2xl font-semibold text-white">
-              Cancel this report request?
+              {reportRemovalIntent.action === "cancel"
+                ? "Cancel this report request?"
+                : "Remove canceled reports?"}
             </h2>
             <p id="cancel-report-description" className="mt-3 text-sm leading-6 text-slate-300">
-              {cancelReportIntent.label} will be removed from the processing queue. This is only
-              possible before report generation starts.
+              {reportRemovalIntent.action === "cancel"
+                ? `${reportRemovalIntent.label} will be removed from the processing queue. This is only possible before report generation starts.`
+                : `${reportRemovalIntent.label} will be permanently removed from the dashboard. Monthly periods will remain available as drafts.`}
             </p>
             <div className="mt-6 flex flex-wrap justify-end gap-3">
               <button
                 type="button"
                 className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-slate-200"
                 disabled={pending}
-                onClick={() => setCancelReportIntent(null)}
+                onClick={() => setReportRemovalIntent(null)}
               >
-                Keep request
+                Keep reports
               </button>
               <button
                 type="button"
@@ -784,13 +789,21 @@ export function DashboardShell({
                 disabled={pending}
                 onClick={() =>
                   runTask(
-                    () => deleteJson(`/api/audits/${cancelReportIntent.auditId}`),
-                    `${cancelReportIntent.label} canceled.`,
-                    () => setCancelReportIntent(null),
+                    () => deleteJson(reportRemovalIntent.url),
+                    reportRemovalIntent.action === "cancel"
+                      ? `${reportRemovalIntent.label} canceled.`
+                      : `${reportRemovalIntent.label} removed from the dashboard.`,
+                    () => setReportRemovalIntent(null),
                   )
                 }
               >
-                {pending ? "Canceling…" : "Cancel request"}
+                {pending
+                  ? reportRemovalIntent.action === "cancel"
+                    ? "Canceling…"
+                    : "Removing…"
+                  : reportRemovalIntent.action === "cancel"
+                    ? "Cancel request"
+                    : "Remove permanently"}
               </button>
             </div>
           </div>
@@ -1613,9 +1626,15 @@ export function DashboardShell({
                               `Audit requested for ${client.name}.`,
                               ({ audit }) =>
                                 setRequestConfirmation({
-                                  title: "Report requested",
-                                  detail: `The diagnostic report for ${client.name} was added to the processing queue.`,
-                                  reference: `Audit ${audit.id.slice(-6)} · queued`,
+                                  title:
+                                    audit.status === "completed"
+                                      ? "Report ready"
+                                      : "Report requested",
+                                  detail:
+                                    audit.status === "completed"
+                                      ? `The diagnostic report for ${client.name} was processed successfully.`
+                                      : `The diagnostic report for ${client.name} was added to the processing queue.`,
+                                  reference: `Audit ${audit.id.slice(-6)} · ${audit.status}`,
                                 }),
                             )
                           }
@@ -3427,15 +3446,32 @@ export function DashboardShell({
                       reportPeriods={client.reportPeriods}
                       readyIntegrationCount={connectedIntegrations.length}
                       runTask={runTask}
-                      onReportRequested={({ auditId, periodLabel }) =>
+                      onReportRequested={({ auditId, periodLabel, status }) =>
                         setRequestConfirmation({
-                          title: "Monthly report requested",
-                          detail: `${periodLabel} was added to the processing queue.`,
-                          reference: `Audit ${auditId.slice(-6)} · queued`,
+                          title:
+                            status === "completed"
+                              ? "Monthly report ready"
+                              : "Monthly report requested",
+                          detail:
+                            status === "completed"
+                              ? `${periodLabel} was processed successfully.`
+                              : `${periodLabel} was added to the processing queue.`,
+                          reference: `Audit ${auditId.slice(-6)} · ${status}`,
                         })
                       }
                       onCancelReport={(auditId, label) =>
-                        setCancelReportIntent({ auditId, label })
+                        setReportRemovalIntent({
+                          url: `/api/audits/${auditId}`,
+                          label,
+                          action: "cancel",
+                        })
+                      }
+                      onRemoveReport={(auditId, label) =>
+                        setReportRemovalIntent({
+                          url: `/api/audits/${auditId}`,
+                          label,
+                          action: "delete",
+                        })
                       }
                     />
 
@@ -3465,7 +3501,25 @@ export function DashboardShell({
                       </div>
                     </div>
 
-                    <div className="mt-5 grid gap-3 md:grid-cols-2">
+                    <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+                      <h4 className="font-semibold text-white">Recent reports</h4>
+                      {client.audits.some((audit) => audit.status === "canceled") ? (
+                        <button
+                          type="button"
+                          className="rounded-full border border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200 transition hover:bg-rose-500/15"
+                          onClick={() =>
+                            setReportRemovalIntent({
+                              url: `/api/clients/${client.id}/audits`,
+                              label: `All canceled reports for ${client.name}`,
+                              action: "delete",
+                            })
+                          }
+                        >
+                          Clear canceled reports
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
                       {client.audits.length === 0 ? (
                         <EmptyState text="No audits yet for this client." compact />
                       ) : (
@@ -3544,17 +3598,47 @@ export function DashboardShell({
                                 <span className="text-slate-500">PDF unavailable</span>
                               )}
                               {audit.status === "queued" ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="text-emerald-300 underline decoration-emerald-300/50 underline-offset-2"
+                                    disabled={pending}
+                                    onClick={() =>
+                                      runTask(
+                                        () => postJson(`/api/audits/${audit.id}`, {}),
+                                        `Audit ${audit.id.slice(-6)} processed.`,
+                                      )
+                                    }
+                                  >
+                                    Process now
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="text-rose-300 underline decoration-rose-300/50 underline-offset-2"
+                                    onClick={() =>
+                                      setReportRemovalIntent({
+                                        url: `/api/audits/${audit.id}`,
+                                        label: `Audit ${audit.id.slice(-6)}`,
+                                        action: "cancel",
+                                      })
+                                    }
+                                  >
+                                    Cancel request
+                                  </button>
+                                </>
+                              ) : audit.status === "canceled" ? (
                                 <button
                                   type="button"
                                   className="text-rose-300 underline decoration-rose-300/50 underline-offset-2"
                                   onClick={() =>
-                                    setCancelReportIntent({
-                                      auditId: audit.id,
+                                    setReportRemovalIntent({
+                                      url: `/api/audits/${audit.id}`,
                                       label: `Audit ${audit.id.slice(-6)}`,
+                                      action: "delete",
                                     })
                                   }
                                 >
-                                  Cancel request
+                                  Remove from dashboard
                                 </button>
                               ) : null}
                             </div>

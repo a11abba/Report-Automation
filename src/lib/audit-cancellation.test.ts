@@ -4,7 +4,11 @@ import type { AuditRecord, JobRecord, ReportPeriodRecord } from "@/lib/audit/typ
 vi.mock("@/lib/storage", () => ({ getStore: vi.fn() }));
 vi.mock("@/services/logger", () => ({ logEvent: vi.fn() }));
 
-import { cancelAudit } from "@/lib/audit-engine";
+import {
+  cancelAudit,
+  deleteCanceledAudit,
+  deleteCanceledAuditsForClient,
+} from "@/lib/audit-engine";
 import { getStore } from "@/lib/storage";
 import { logEvent } from "@/services/logger";
 
@@ -107,5 +111,43 @@ describe("cancelAudit", () => {
       "Only reports that are still queued can be canceled.",
     );
     expect(logEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("canceled report cleanup", () => {
+  it("permanently removes a canceled audit", async () => {
+    const store = {
+      getAudit: vi.fn().mockResolvedValue(canceledAudit),
+      deleteAudit: vi.fn().mockResolvedValue(canceledAudit),
+    };
+    vi.mocked(getStore).mockResolvedValue(store as never);
+
+    await expect(deleteCanceledAudit(canceledAudit.id)).resolves.toEqual(canceledAudit);
+    expect(store.deleteAudit).toHaveBeenCalledWith(canceledAudit.id);
+  });
+
+  it("removes every canceled audit for a client and preserves other statuses", async () => {
+    const completedAudit: AuditRecord = {
+      ...queuedAudit,
+      id: "audit_completed",
+      status: "completed",
+    };
+    const secondCanceledAudit: AuditRecord = {
+      ...canceledAudit,
+      id: "audit_canceled_two",
+    };
+    const store = {
+      listAuditsByClient: vi
+        .fn()
+        .mockResolvedValue([canceledAudit, completedAudit, secondCanceledAudit]),
+      deleteAudit: vi.fn().mockResolvedValue(canceledAudit),
+    };
+    vi.mocked(getStore).mockResolvedValue(store as never);
+
+    await expect(deleteCanceledAuditsForClient("client_test")).resolves.toEqual({
+      deletedCount: 2,
+    });
+    expect(store.deleteAudit).toHaveBeenCalledTimes(2);
+    expect(store.deleteAudit).not.toHaveBeenCalledWith(completedAudit.id);
   });
 });

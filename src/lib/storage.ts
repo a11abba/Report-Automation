@@ -220,6 +220,7 @@ export interface AppStore {
   updateAudit(id: string, patch: Partial<AuditRecord>): Promise<AuditRecord | null>;
   claimQueuedAudit(id: string): Promise<AuditRecord | null>;
   cancelQueuedAudit(id: string): Promise<AuditRecord | null>;
+  deleteAudit(id: string): Promise<AuditRecord | null>;
   saveReport(auditId: string, report: AuditReportPayload): Promise<void>;
   getReport(auditId: string): Promise<AuditReportPayload | null>;
   listReportPeriodsByClient(clientId: string): Promise<ReportPeriodRecord[]>;
@@ -1821,6 +1822,35 @@ class SQLiteStore implements AppStore {
       .prepare("update audits set status = 'canceled', updated_at = ?, completed_at = ?, error_message = null where id = ? and status = 'queued'")
       .run(now, now, id);
     return result.changes > 0 ? this.getAudit(id) : null;
+  }
+
+  async deleteAudit(id: string) {
+    await this.ensureMigrated();
+    const current = await this.getAudit(id);
+    if (!current) return null;
+    const jobs = await this.listJobs();
+    const now = new Date().toISOString();
+
+    this.db.exec("begin");
+    try {
+      this.db
+        .prepare("update report_periods set status = 'draft', audit_id = null, generated_at = null, updated_at = ? where audit_id = ?")
+        .run(now, id);
+      for (const job of jobs) {
+        if (job.payload["auditId"] === id) {
+          this.db.prepare("delete from jobs where id = ?").run(job.id);
+        }
+      }
+      this.db.prepare("delete from audit_reports where audit_id = ?").run(id);
+      this.db.prepare("delete from audit_events where audit_id = ?").run(id);
+      this.db.prepare("delete from report_feedback where audit_id = ?").run(id);
+      this.db.prepare("delete from audits where id = ?").run(id);
+      this.db.exec("commit");
+      return current;
+    } catch (error) {
+      this.db.exec("rollback");
+      throw error;
+    }
   }
 
   async saveReport(auditId: string, report: AuditReportPayload) {

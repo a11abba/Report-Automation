@@ -37,6 +37,10 @@ GOOGLE_OAUTH_REDIRECT_URI=https://reports.fergro.me/api/integrations/google/oaut
 AUDIT_PLATFORM_SECRET=...
 ```
 
+Do not set `AUDIT_QUEUE_MODE=worker` on Vercel. Report generation runs inside a Vercel Function
+with a 300-second limit. The worker mode is reserved for hosts that run `npm run worker` as a
+persistent process.
+
 The Google client ID and secret must belong to the same OAuth Web application configured in Google Cloud Console.
 
 After changing an environment variable, create a new production deployment. Existing deployments do not receive updated environment variables automatically.

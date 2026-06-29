@@ -108,7 +108,7 @@ interface ReportPeriodMutationResponse {
 }
 
 interface ReportGenerationResponse {
-  audit: { id: string };
+  audit: { id: string; status: ReportPeriodView["status"] };
   reportPeriod: ReportPeriodView;
 }
 
@@ -161,6 +161,7 @@ export function ReportPeriodPanel({
   runTask,
   onReportRequested,
   onCancelReport,
+  onRemoveReport,
 }: {
   clientId: string;
   reportPeriods: ReportPeriodView[];
@@ -170,8 +171,13 @@ export function ReportPeriodPanel({
     successMessage: string,
     onSuccess?: (result: T) => void,
   ) => void;
-  onReportRequested: (request: { auditId: string; periodLabel: string }) => void;
+  onReportRequested: (request: {
+    auditId: string;
+    periodLabel: string;
+    status: ReportPeriodView["status"];
+  }) => void;
   onCancelReport: (auditId: string, label: string) => void;
+  onRemoveReport: (auditId: string, label: string) => void;
 }) {
   const [prepPeriodId, setPrepPeriodId] = useState<string | null>(null);
   const [newPeriodKey, setNewPeriodKey] = useState("");
@@ -290,6 +296,20 @@ export function ReportPeriodPanel({
                       Cancel request
                     </button>
                   ) : null}
+                  {reportPeriod.status === "canceled" && reportPeriod.auditId ? (
+                    <button
+                      type="button"
+                      className="rounded-full border border-rose-400/20 bg-rose-500/10 px-4 py-2 text-sm text-rose-200 transition hover:bg-rose-500/15"
+                      onClick={() =>
+                        onRemoveReport(
+                          reportPeriod.auditId!,
+                          `${formatMonthLabel(reportPeriod.periodKey)} report`,
+                        )
+                      }
+                    >
+                      Remove from dashboard
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="rounded-full border border-[#8f7a2f] bg-[linear-gradient(135deg,#f3c15b_0%,#dba93a_100%)] px-4 py-2 text-sm font-medium text-[#11161f] disabled:opacity-50"
@@ -394,6 +414,7 @@ export function ReportPeriodPanel({
                             onReportRequested({
                               auditId: audit.id,
                               periodLabel: formatMonthLabel(reportPeriod.periodKey),
+                              status: audit.status,
                             }),
                         )
                       }

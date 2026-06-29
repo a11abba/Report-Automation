@@ -1371,6 +1371,28 @@ export class PostgresStore implements AppStore {
     return result.rowCount ? this.getAudit(id) : null;
   }
 
+  async deleteAudit(id: string) {
+    const current = await this.getAudit(id);
+    if (!current) return null;
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      await client.query(
+        "update report_periods set status = 'draft', audit_id = null, generated_at = null, updated_at = now() where audit_id = $1",
+        [id],
+      );
+      await client.query("delete from jobs where payload->>'auditId' = $1", [id]);
+      await client.query("delete from audits where id = $1", [id]);
+      await client.query("commit");
+      return current;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async saveReport(auditId: string, report: AuditReportPayload) {
     await this.pool.query(
       `insert into audit_reports (audit_id, payload) values ($1,$2::jsonb)

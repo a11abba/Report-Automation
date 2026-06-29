@@ -463,7 +463,8 @@ export async function listDashboardData(
 export async function runAudit(auditId: string) {
   const store = await getStore();
   const audit = await store.getAudit(auditId);
-  if (!audit) throw new Error(`Audit ${auditId} not found.`);
+  // A stale external queue message may arrive after a canceled audit was permanently removed.
+  if (!audit) return null;
   if (audit.status !== "queued") return null;
   const client = await store.getClient(audit.clientId);
   if (!client) throw new Error(`Client ${audit.clientId} not found.`);
@@ -774,6 +775,29 @@ export async function cancelAudit(auditId: string) {
   return audit;
 }
 
+export async function deleteCanceledAudit(auditId: string) {
+  const store = await getStore();
+  const audit = await store.getAudit(auditId);
+  if (!audit) {
+    throw new Error("Audit not found.");
+  }
+  if (audit.status !== "canceled") {
+    throw new Error("Only canceled reports can be permanently removed.");
+  }
+  return store.deleteAudit(auditId);
+}
+
+export async function deleteCanceledAuditsForClient(clientId: string) {
+  const store = await getStore();
+  const canceledAudits = (await store.listAuditsByClient(clientId)).filter(
+    (audit) => audit.status === "canceled",
+  );
+  for (const audit of canceledAudits) {
+    await store.deleteAudit(audit.id);
+  }
+  return { deletedCount: canceledAudits.length };
+}
+
 export async function createAuditForClient(clientId: string, scope?: AuditScope) {
   const store = await getStore();
   const client = await store.getClient(clientId);
@@ -837,8 +861,12 @@ export async function createAuditForClient(clientId: string, scope?: AuditScope)
 }
 
 export async function enqueueAudit(auditId: string) {
-  const databaseUrl = getPgBossDatabaseUrl();
-  if (databaseUrl) {
+  const queueMode = process.env.AUDIT_QUEUE_MODE?.trim().toLowerCase();
+  if (queueMode === "worker") {
+    const databaseUrl = getPgBossDatabaseUrl();
+    if (!databaseUrl) {
+      throw new Error("AUDIT_QUEUE_MODE=worker requires DATABASE_URL.");
+    }
     const boss = new PgBoss(databaseUrl);
     await boss.start();
     await boss.createQueue(AUDIT_QUEUE_NAME).catch(() => undefined);

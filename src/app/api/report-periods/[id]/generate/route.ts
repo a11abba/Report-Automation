@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { generateReportPeriod } from "@/lib/audit-engine";
 import { loadReportPeriodForViewer, requireRouteViewer } from "@/lib/route-auth";
 
+export const maxDuration = 300;
+
 export async function POST(
   _request: Request,
   context: { params: Promise<{ id: string }> },
