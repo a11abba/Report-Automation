@@ -30,6 +30,12 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# local Codex development artifacts
+.codex-*.log
+.codex-*.err.log
+.codex-*.png
+.codex-*.html
+
 # env files (can opt-in for committing if needed)
 .env*
 
